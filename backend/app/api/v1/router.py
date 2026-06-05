@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.clients.router import router as clients_router
 from app.api.v1.projects.router import router as projects_router
+from app.api.v1.requirements.router import router as requirements_router
 from app.api.v1.tasks.router import router as tasks_router
 
 api_router = APIRouter(prefix="")
@@ -13,4 +14,5 @@ api_router = APIRouter(prefix="")
 api_router.include_router(auth_router)
 api_router.include_router(clients_router)
 api_router.include_router(projects_router)
+api_router.include_router(requirements_router)
 api_router.include_router(tasks_router)

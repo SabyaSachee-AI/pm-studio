@@ -2,16 +2,30 @@
 
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
 
 settings = get_settings()
+
+if settings.sync_database_url is None:
+    raise RuntimeError("sync_database_url is not configured")
+
+sync_engine: Engine = create_engine(settings.sync_database_url, pool_pre_ping=True)
+
+SyncSessionLocal: sessionmaker[Session] = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=sync_engine,
+)
 
 engine: AsyncEngine = create_async_engine(
     settings.database_url,
