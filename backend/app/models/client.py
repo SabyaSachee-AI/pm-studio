@@ -25,6 +25,7 @@ class Client(TimeStampedModel):
         nullable=False,
     )
     created_by: Mapped["User"] = relationship("User")
+    projects: Mapped[list["Project"]] = relationship("Project", back_populates="client")
 
     def __repr__(self) -> str:
         return f"<Client id={self.id} name={self.name}>"
