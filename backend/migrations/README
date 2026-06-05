@@ -1,0 +1,5 @@
+> All migrations must be generated and run from the backend/ folder.
+> Command to create migration: alembic revision --autogenerate -m "description"
+> Command to run migration: alembic upgrade head
+
+CRITICAL RULE: After any autogenerate migration, always inspect the migration file before running it. Alembic will NOT detect renamed columns or many other changes.
