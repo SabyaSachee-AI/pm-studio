@@ -19,8 +19,6 @@ target_metadata = Base.metadata
 
 def get_url() -> str:
     """Return the sync database URL from application settings."""
-    if settings.sync_database_url is None:
-        raise RuntimeError("sync_database_url is not configured")
     return settings.sync_database_url
 
 

@@ -128,3 +128,20 @@
     @apply font-sans;
   }
 }
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-document {
+    color: #000;
+    background: #fff;
+  }
+  .print-document section {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  @page {
+    margin: 2cm;
+  }
+}

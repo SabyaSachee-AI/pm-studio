@@ -1,8 +1,9 @@
-import os
 import instructor
 from anthropic import AsyncAnthropic
 from pydantic import BaseModel
 from typing import TypeVar, Type
+
+from app.core.config import get_settings
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -20,7 +21,7 @@ async def ai_call(
     ALWAYS returns validated Pydantic object.
     NEVER returns raw markdown or string.
     """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = get_settings().anthropic_api_key
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY is not set in environment")
 

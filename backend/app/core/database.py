@@ -16,10 +16,10 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
-if settings.sync_database_url is None:
-    raise RuntimeError("sync_database_url is not configured")
-
-sync_engine: Engine = create_engine(settings.sync_database_url, pool_pre_ping=True)
+sync_engine: Engine = create_engine(
+    settings.sync_database_url,  # derived from database_url when not set
+    pool_pre_ping=True,
+)
 
 SyncSessionLocal: sessionmaker[Session] = sessionmaker(
     autocommit=False,

@@ -19,9 +19,7 @@ export default function LoginPage() {
     setIsSubmitting(true);
 
     try {
-      const tokens = await api.login({ email, password });
-      localStorage.setItem("access_token", tokens.access_token);
-      localStorage.setItem("refresh_token", tokens.refresh_token);
+      await api.login({ email, password });
       router.replace("/dashboard");
     } catch (err) {
       const message =

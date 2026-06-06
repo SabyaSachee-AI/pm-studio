@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     database_url: str = Field(
@@ -64,6 +66,30 @@ class Settings(BaseSettings):
     allowed_origins: list[str] = Field(
         default=["http://localhost:3000"],
         description="CORS allowed origins.",
+    )
+    r2_account_id: str | None = Field(
+        default=None,
+        description="Cloudflare R2 account ID.",
+    )
+    r2_access_key_id: str | None = Field(
+        default=None,
+        description="Cloudflare R2 access key ID.",
+    )
+    r2_secret_access_key: str | None = Field(
+        default=None,
+        description="Cloudflare R2 secret access key.",
+    )
+    r2_bucket_name: str | None = Field(
+        default=None,
+        description="Cloudflare R2 bucket name.",
+    )
+    r2_endpoint_url: str | None = Field(
+        default=None,
+        description="Cloudflare R2 S3-compatible endpoint URL.",
+    )
+    upload_dir: str = Field(
+        default="uploads",
+        description="Local upload directory when R2 is not configured.",
     )
 
     @field_validator("allowed_origins", mode="before")

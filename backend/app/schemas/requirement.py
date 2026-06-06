@@ -29,6 +29,15 @@ class RequirementAnalysisSchema(BaseModel):
     summary: str
 
 
+class CostEstimateSchema(BaseModel):
+    feature_units: int
+    complexity_multiplier: float
+    min_budget_usd: int
+    max_budget_usd: int
+    currency: str
+    note: str
+
+
 class RequirementResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -37,5 +46,6 @@ class RequirementResponse(BaseModel):
     original_filename: str
     status: str
     analysis_result: Optional[dict] = None
+    cost_estimate: Optional[dict] = None
     error_message: Optional[str] = None
     created_at: datetime

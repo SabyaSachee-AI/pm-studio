@@ -52,6 +52,14 @@ class Requirement(TimeStampedModel):
         nullable=False,
     )
     celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    parent_requirement_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id"),
+        nullable=True,
+    )
+    feedback_filename: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    feedback_storage_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    cost_estimate_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     project: Mapped["Project"] = relationship("Project", back_populates="requirements")
     uploaded_by: Mapped["User"] = relationship("User")

@@ -19,10 +19,19 @@ class Client(TimeStampedModel):
     email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id"),
+        nullable=True,
+    )
     created_by_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id"),
         nullable=False,
+    )
+    organization: Mapped["Organization | None"] = relationship(
+        "Organization",
+        back_populates="clients",
     )
     created_by: Mapped["User"] = relationship("User")
     projects: Mapped[list["Project"]] = relationship("Project", back_populates="client")

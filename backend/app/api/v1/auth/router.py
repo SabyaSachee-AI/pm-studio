@@ -3,11 +3,12 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.user import User
@@ -17,14 +18,11 @@ from app.services.auth.service import (
     create_access_token,
     create_token_pair,
     create_user,
-    decode_token,
     get_user_by_email,
     get_user_by_id,
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 settings = get_settings()
 
@@ -33,21 +31,6 @@ class RefreshTokenRequest(BaseModel):
     """Request body for refreshing an access token."""
 
     refresh_token: str
-
-
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db),
-) -> User:
-    """Return the authenticated user from a valid access token."""
-    payload = decode_token(token)
-    user = await get_user_by_id(db, uuid.UUID(payload["sub"]))
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-        )
-    return user
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -136,3 +119,11 @@ async def get_me(
 ) -> UserResponse:
     """Return the currently authenticated user."""
     return UserResponse.model_validate(current_user)
+
+
+@router.post("/logout")
+async def logout(
+    current_user: User = Depends(get_current_user),
+) -> dict[str, str]:
+    """Invalidate the client session (stateless JWT — client must discard tokens)."""
+    return {"detail": "Successfully logged out"}
