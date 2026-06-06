@@ -4,9 +4,15 @@ from fastapi import APIRouter
 
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.clients.router import router as clients_router
+from app.api.v1.documents.router import router as documents_router
+from app.api.v1.prds.router import router as prds_router
 from app.api.v1.projects.router import router as projects_router
 from app.api.v1.requirements.router import router as requirements_router
-from app.api.v1.tasks.router import router as tasks_router
+from app.api.v1.specs.router import router as specs_router
+from app.api.v1.srs.router import router as srs_router
+from app.api.v1.tasks.router import router as celery_tasks_router
+from app.api.v1.tasks_domain.router import router as tasks_domain_router
+from app.api.v1.users.router import router as users_router
 
 api_router = APIRouter(prefix="")
 
@@ -14,5 +20,11 @@ api_router = APIRouter(prefix="")
 api_router.include_router(auth_router)
 api_router.include_router(clients_router)
 api_router.include_router(projects_router)
+api_router.include_router(prds_router)
 api_router.include_router(requirements_router)
-api_router.include_router(tasks_router)
+api_router.include_router(srs_router)
+api_router.include_router(specs_router)
+api_router.include_router(tasks_domain_router)
+api_router.include_router(celery_tasks_router)
+api_router.include_router(users_router)
+api_router.include_router(documents_router)

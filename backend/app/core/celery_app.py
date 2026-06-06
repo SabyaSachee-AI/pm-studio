@@ -16,7 +16,14 @@ celery_app = Celery(
     "pm_studio",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.workers.health_tasks", "app.workers.requirement_tasks"],
+    include=[
+        "app.workers.health_tasks",
+        "app.workers.requirement_tasks",
+        "app.workers.prd_tasks",
+        "app.workers.srs_tasks",
+        "app.workers.pdf_tasks",
+        "app.workers.spec_tasks",
+    ],
 )
 
 celery_app.conf.update(
