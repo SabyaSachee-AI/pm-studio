@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,19 +13,32 @@ from app.models.screen_permission import ScreenPermission
 from app.models.user import User, UserRole
 from app.services.auth.service import decode_token, get_user_by_id
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl="/api/v1/auth/login",
+    auto_error=False,
+)
+
+ACCESS_COOKIE = "access_token"
 
 ADMIN_ROLES = {UserRole.studio_owner, UserRole.studio_admin}
 
 
 async def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
+    token: str | None = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Return the authenticated user from a valid access token."""
-    payload = decode_token(token)
+    """Return the authenticated user from HttpOnly cookie or Authorization header."""
+    access_token = token or request.cookies.get(ACCESS_COOKIE)
+    if not access_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    payload = decode_token(access_token)
     user = await get_user_by_id(db, UUID(payload["sub"]))
-    if not user:
+    if user is None:
         raise HTTPException(status_code=401, detail="User not found")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="User account is inactive")

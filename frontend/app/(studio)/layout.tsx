@@ -16,13 +16,11 @@ export default function StudioLayout({
   const [user, setUser] = useState<UserResponse | null>(null);
 
   useEffect(() => {
-    if (!api.getAccessToken()) {
-      router.replace("/login");
-      return;
-    }
     api
       .me()
-      .then(setUser)
+      .then((currentUser) => {
+        setUser(currentUser);
+      })
       .catch(() => {
         api.clearTokens();
         router.replace("/login");

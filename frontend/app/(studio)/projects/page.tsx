@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { api, type Client, type Project } from "@/lib/api";
@@ -51,9 +52,17 @@ export default function ProjectsPage() {
       </form>
       <div className="rounded-xl border border-gray-800">
         {projects.map((p) => (
-          <div key={p.id} className="border-b border-gray-800 px-4 py-3 last:border-0">
-            <p className="font-medium">{p.name}</p>
-            <p className="text-xs text-gray-500">{p.status}</p>
+          <div key={p.id} className="flex items-center justify-between border-b border-gray-800 px-4 py-3 last:border-0">
+            <div>
+              <p className="font-medium">{p.name}</p>
+              <p className="text-xs text-gray-500">{p.status}</p>
+            </div>
+            <Link
+              href={`/tasks?project=${p.id}`}
+              className="text-xs text-blue-400 underline"
+            >
+              Open Kanban
+            </Link>
           </div>
         ))}
       </div>

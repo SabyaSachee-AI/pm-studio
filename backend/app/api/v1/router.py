@@ -4,7 +4,11 @@ from fastapi import APIRouter
 
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.clients.router import router as clients_router
+from app.api.v1.decisions.router import router as decisions_router
 from app.api.v1.documents.router import router as documents_router
+from app.api.v1.jobs.router import router as jobs_router
+from app.api.v1.knowledge.router import router as knowledge_router
+from app.api.v1.notifications.router import router as notifications_router
 from app.api.v1.prds.router import router as prds_router
 from app.api.v1.projects.router import router as projects_router
 from app.api.v1.requirements.router import router as requirements_router
@@ -25,6 +29,10 @@ api_router.include_router(requirements_router)
 api_router.include_router(srs_router)
 api_router.include_router(specs_router)
 api_router.include_router(tasks_domain_router)
+api_router.include_router(jobs_router)
 api_router.include_router(celery_tasks_router)
+api_router.include_router(knowledge_router)
+api_router.include_router(decisions_router)
+api_router.include_router(notifications_router)
 api_router.include_router(users_router)
 api_router.include_router(documents_router)

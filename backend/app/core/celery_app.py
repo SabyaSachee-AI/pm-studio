@@ -23,6 +23,7 @@ celery_app = Celery(
         "app.workers.srs_tasks",
         "app.workers.pdf_tasks",
         "app.workers.spec_tasks",
+        "app.workers.module_tasks",
     ],
 )
 

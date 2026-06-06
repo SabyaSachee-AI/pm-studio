@@ -9,6 +9,7 @@ export default function RequirementDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [req, setReq] = useState<Requirement | null>(null);
   const [cost, setCost] = useState<Record<string, unknown> | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     api.getRequirement(id).then(setReq);
@@ -24,10 +25,29 @@ export default function RequirementDetailPage() {
     <div className="space-y-6 print-document">
       <div className="flex items-center justify-between no-print">
         <h1 className="text-2xl font-semibold">Requirement analysis</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <a href={api.getClarificationPdfUrl(id)} target="_blank" rel="noreferrer">
             <Button variant="outline">Download clarification PDF</Button>
           </a>
+          <label className="inline-flex cursor-pointer items-center rounded-md border border-gray-700 px-3 py-2 text-sm hover:bg-gray-900">
+            {uploading ? "Uploading..." : "Upload client feedback"}
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setUploading(true);
+                try {
+                  await api.uploadFeedback(id, file);
+                  setReq(await api.getRequirement(id));
+                } finally {
+                  setUploading(false);
+                }
+              }}
+            />
+          </label>
         </div>
       </div>
       <p className="text-sm text-gray-400">{req.original_filename} · {req.status}</p>

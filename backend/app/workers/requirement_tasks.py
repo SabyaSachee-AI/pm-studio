@@ -52,7 +52,12 @@ def process_requirement_task(requirement_id: str) -> None:
         req.status = RequirementStatus.analyzing
         db.commit()
 
-        analysis_result = asyncio.run(analyze_requirements_ai(text))
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            analysis_result = loop.run_until_complete(analyze_requirements_ai(text))
+        finally:
+            loop.close()
         req.analysis_result = analysis_result.model_dump()
 
         cost = estimate_cost(analysis_result)
@@ -61,10 +66,13 @@ def process_requirement_task(requirement_id: str) -> None:
         db.commit()
 
     except Exception as exc:
-        logger.error("Requirement processing failed: %s", exc)
+        logger.exception(
+            "Requirement processing failed",
+            extra={"requirement_id": requirement_id},
+        )
         if req is not None:
             req.status = RequirementStatus.failed
-            req.error_message = str(exc)[:1000]
+            req.error_message = str(exc)[:500]
             db.commit()
     finally:
         db.close()

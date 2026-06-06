@@ -102,3 +102,52 @@ def build_prd_html(prd: dict, project_name: str, version: int) -> str:
     </body>
     </html>
     """
+
+
+def build_srs_html(srs: dict, project_name: str, version: int) -> str:
+    """Build printable HTML for an SRS document."""
+    fr_rows = "".join(
+        f"<tr><td>{fr.get('fr_number', '')}</td>"
+        f"<td>{fr.get('title', '')}</td>"
+        f"<td>{fr.get('description', '')}</td>"
+        f"<td>{fr.get('priority', '')}</td></tr>"
+        for fr in srs.get("functional_requirements", [])
+    )
+    nfr_items = "".join(
+        f"<li><strong>{nfr.get('category', '')}</strong>: {nfr.get('description', '')} "
+        f"({nfr.get('metric', '')}: {nfr.get('threshold', '')})</li>"
+        for nfr in srs.get("nonfunctional_requirements", [])
+    )
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8"/>
+      <style>
+        body {{ font-family: Georgia, serif; margin: 40px; color: #111; }}
+        h1 {{ font-size: 24px; }}
+        h2 {{ font-size: 16px; margin-top: 24px; border-bottom: 1px solid #ddd; }}
+        p, li {{ font-size: 13px; line-height: 1.5; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 12px; }}
+        th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; font-size: 12px; }}
+        th {{ background: #f5f5f5; }}
+        .meta {{ color: #666; font-size: 12px; }}
+      </style>
+    </head>
+    <body>
+      <h1>Software requirements specification</h1>
+      <p class="meta">{project_name} · Version {version}</p>
+      <h2>Introduction</h2>
+      <p>{srs.get("introduction", "")}</p>
+      <h2>Scope</h2>
+      <p>{srs.get("scope", "")}</p>
+      <h2>Functional requirements</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Title</th><th>Description</th><th>Priority</th></tr></thead>
+        <tbody>{fr_rows}</tbody>
+      </table>
+      <h2>Non-functional requirements</h2>
+      <ul>{nfr_items}</ul>
+    </body>
+    </html>
+    """

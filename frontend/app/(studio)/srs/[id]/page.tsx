@@ -37,6 +37,19 @@ export default function SrsDetailPage() {
         <Button onClick={() => api.approveSrs(id).then(setSrs)}>
           Approve (architect)
         </Button>
+        <a href={api.getSrsPdfUrl(id)} target="_blank" rel="noreferrer">
+          <Button variant="outline">Export PDF</Button>
+        </a>
+        <Button
+          variant="outline"
+          onClick={() =>
+            api.saveToKnowledge({ source_type: "srs", source_id: id }).then(() =>
+              alert("Saved to knowledge base"),
+            )
+          }
+        >
+          Save to KB
+        </Button>
       </div>
 
       <section>

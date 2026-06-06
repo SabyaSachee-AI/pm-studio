@@ -1,7 +1,5 @@
 const DEFAULT_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
-const ACCESS_TOKEN_KEY = "access_token";
-const REFRESH_TOKEN_KEY = "refresh_token";
 
 export interface UserRegister {
   email: string;
@@ -86,8 +84,90 @@ export interface SRS {
   updated_at: string;
 }
 
+export interface ScreenPermission {
+  screen_key: string;
+  can_view: boolean;
+  can_edit: boolean;
+}
+
+export interface KanbanTask {
+  id: string;
+  project_id: string;
+  srs_id: string | null;
+  title: string;
+  description: string | null;
+  task_type: string;
+  priority: string;
+  status: string;
+  assigned_to_id: string | null;
+  effort_hours: number | null;
+  fr_references: string[] | null;
+  module_name: string | null;
+  order_index: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KanbanBoard {
+  backlog: KanbanTask[];
+  assigned: KanbanTask[];
+  in_progress: KanbanTask[];
+  in_review: KanbanTask[];
+  done: KanbanTask[];
+}
+
+export interface TaskSpec {
+  id: string;
+  task_id: string;
+  status: string;
+  content_json: Record<string, unknown> | null;
+  assigned_to_id: string | null;
+  generation_task_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeItem {
+  id: string;
+  project_id: string | null;
+  item_type: string;
+  source_type: string;
+  source_id: string | null;
+  title: string;
+  description: string | null;
+  content_json: Record<string, unknown> | null;
+  tags: string[] | null;
+  saved_by_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Decision {
+  id: string;
+  project_id: string;
+  title: string;
+  decision: string;
+  reason: string;
+  alternatives: string[] | null;
+  decided_by_id: string;
+  decided_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Notification {
+  id: string;
+  user_id: string;
+  title: string;
+  message: string;
+  link: string | null;
+  is_read: boolean;
+  created_at: string;
+}
+
 export class ApiClient {
   private readonly baseUrl: string;
+  private sessionActive = false;
 
   constructor(baseUrl: string = DEFAULT_BASE_URL) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
@@ -97,19 +177,13 @@ export class ApiClient {
     return this.baseUrl.replace(/\/api\/v1$/, "");
   }
 
+  /** True when a cookie-based session is believed active (not the token itself). */
   getAccessToken(): string | null {
-    if (typeof window === "undefined") return null;
-    return localStorage.getItem(ACCESS_TOKEN_KEY);
-  }
-
-  setTokens(access: string, refresh: string): void {
-    localStorage.setItem(ACCESS_TOKEN_KEY, access);
-    localStorage.setItem(REFRESH_TOKEN_KEY, refresh);
+    return this.sessionActive ? "cookie" : null;
   }
 
   clearTokens(): void {
-    localStorage.removeItem(ACCESS_TOKEN_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    this.sessionActive = false;
   }
 
   private async request<T>(
@@ -120,19 +194,23 @@ export class ApiClient {
     if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
       headers.set("Content-Type", "application/json");
     }
-    const token = this.getAccessToken();
-    if (token && !headers.has("Authorization")) {
-      headers.set("Authorization", `Bearer ${token}`);
-    }
     const url = endpoint.startsWith("http")
       ? endpoint
       : `${this.baseUrl}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
-    const response = await fetch(url, { ...options, headers });
-    if (response.status === 401 && this.getRefreshToken()) {
+    const fetchOptions: RequestInit = {
+      ...options,
+      headers,
+      credentials: "include",
+    };
+    const response = await fetch(url, fetchOptions);
+    if (
+      response.status === 401 &&
+      endpoint !== "/auth/refresh" &&
+      endpoint !== "/auth/login"
+    ) {
       try {
         await this.refresh();
-        headers.set("Authorization", `Bearer ${this.getAccessToken()}`);
-        const retry = await fetch(url, { ...options, headers });
+        const retry = await fetch(url, fetchOptions);
         if (!retry.ok) throw new Error(await retry.text());
         if (retry.status === 204) return undefined as T;
         return (await retry.json()) as T;
@@ -156,11 +234,6 @@ export class ApiClient {
     return (await response.json()) as T;
   }
 
-  getRefreshToken(): string | null {
-    if (typeof window === "undefined") return null;
-    return localStorage.getItem(REFRESH_TOKEN_KEY);
-  }
-
   async health() {
     return this.request(`${this.getServerUrl()}/health`);
   }
@@ -181,19 +254,15 @@ export class ApiClient {
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form.toString(),
     });
-    this.setTokens(result.access_token, result.refresh_token);
+    this.sessionActive = true;
     return result;
   }
 
   async refresh(): Promise<TokenResponse> {
-    const refreshToken = this.getRefreshToken();
-    if (!refreshToken) throw new Error("No refresh token");
     const result = await this.request<TokenResponse>("/auth/refresh", {
       method: "POST",
-      body: JSON.stringify({ refresh_token: refreshToken }),
     });
-    const existingRefresh = this.getRefreshToken() ?? refreshToken;
-    this.setTokens(result.access_token, existingRefresh);
+    this.sessionActive = true;
     return result;
   }
 
@@ -206,11 +275,17 @@ export class ApiClient {
   }
 
   async me(): Promise<UserResponse> {
-    return this.request("/auth/me");
+    const user = await this.request<UserResponse>("/auth/me");
+    this.sessionActive = true;
+    return user;
+  }
+
+  async getScreens(): Promise<ScreenPermission[]> {
+    return this.request("/auth/screens");
   }
 
   async getTaskStatus(taskId: string): Promise<TaskStatus> {
-    return this.request(`/tasks/${taskId}`);
+    return this.request(`/jobs/${taskId}`);
   }
 
   subscribeTask(
@@ -218,7 +293,7 @@ export class ApiClient {
     onUpdate: (data: TaskStatus) => void,
     onDone?: () => void,
   ): EventSource {
-    const url = `${this.getServerUrl()}/api/v1/tasks/${taskId}/stream`;
+    const url = `${this.getServerUrl()}/api/v1/jobs/${taskId}/stream`;
     const es = new EventSource(url);
     es.onmessage = (event) => {
       const data = JSON.parse(event.data) as TaskStatus;
@@ -304,7 +379,7 @@ export class ApiClient {
   async getPrd(id: string): Promise<PRD> {
     return this.request(`/prds/${id}`);
   }
-  async updatePrd(id: string, content: Record<string, unknown>, changeNote?: string) {
+  async updatePrd(id: string, content: Record<string, unknown>, changeNote?: string): Promise<PRD> {
     return this.request(`/prds/${id}`, {
       method: "PATCH",
       body: JSON.stringify({ content_json: content, change_note: changeNote }),
@@ -338,6 +413,92 @@ export class ApiClient {
   }
   async approveSrs(id: string): Promise<SRS> {
     return this.request(`/srs/${id}/approve`, { method: "PATCH" });
+  }
+  getSrsPdfUrl(id: string): string {
+    return `${this.baseUrl}/documents/srs/${id}/export-pdf/sync`;
+  }
+
+  // Kanban tasks
+  async getKanban(projectId: string): Promise<KanbanBoard> {
+    return this.request(`/tasks/kanban/${projectId}`);
+  }
+  async createTask(body: Partial<KanbanTask> & { project_id: string; title: string }) {
+    return this.request<KanbanTask>("/tasks", { method: "POST", body: JSON.stringify(body) });
+  }
+  async updateTaskStatus(taskId: string, status: string, note?: string) {
+    return this.request<KanbanTask>(`/tasks/${taskId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, note }),
+    });
+  }
+  async extractModules(projectId: string, srsId: string) {
+    return this.request<{ task_id: string; status: string }>("/tasks/extract-modules", {
+      method: "POST",
+      body: JSON.stringify({ project_id: projectId, srs_id: srsId }),
+    });
+  }
+
+  // Specs
+  async generateSpec(taskId: string) {
+    return this.request<{ spec_id: string; task_id_celery: string }>("/specs/generate", {
+      method: "POST",
+      body: JSON.stringify({ task_id: taskId }),
+    });
+  }
+  async getSpec(specId: string): Promise<TaskSpec> {
+    return this.request(`/specs/${specId}`);
+  }
+  async getSpecByTask(taskId: string): Promise<TaskSpec> {
+    return this.request(`/specs/task/${taskId}`);
+  }
+  async assignSpec(specId: string, assignedToId: string): Promise<TaskSpec> {
+    return this.request(`/specs/${specId}/assign`, {
+      method: "PATCH",
+      body: JSON.stringify({ assigned_to_id: assignedToId }),
+    });
+  }
+
+  // Knowledge base
+  async listKnowledgeItems(projectId?: string): Promise<KnowledgeItem[]> {
+    const q = projectId ? `?project_id=${projectId}` : "";
+    return this.request(`/knowledge/items${q}`);
+  }
+  async saveToKnowledge(body: {
+    source_type: string;
+    source_id: string;
+    title?: string;
+    tags?: string[];
+  }): Promise<KnowledgeItem> {
+    return this.request("/knowledge/items/save-from-source", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  // Decisions
+  async listDecisions(projectId?: string): Promise<Decision[]> {
+    const q = projectId ? `?project_id=${projectId}` : "";
+    return this.request(`/decisions${q}`);
+  }
+  async createDecision(body: {
+    project_id: string;
+    title: string;
+    decision: string;
+    reason: string;
+    alternatives?: string[];
+  }): Promise<Decision> {
+    return this.request("/decisions", { method: "POST", body: JSON.stringify(body) });
+  }
+
+  // Notifications
+  async listNotifications(unreadOnly = false): Promise<Notification[]> {
+    return this.request(`/notifications?unread_only=${unreadOnly}`);
+  }
+  async markNotificationRead(id: string): Promise<Notification> {
+    return this.request(`/notifications/${id}/read`, { method: "PATCH" });
+  }
+  async markAllNotificationsRead(): Promise<void> {
+    return this.request("/notifications/read-all", { method: "POST" });
   }
 
   // Users (admin)

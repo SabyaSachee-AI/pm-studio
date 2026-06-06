@@ -10,12 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user, require_screen_permission
 from app.core.database import get_db
 from app.models.prd import PRD
+from app.models.srs import SRS
 from app.models.project import Project
 from app.models.requirement import Requirement
 from app.models.user import User
 from app.services.pdf.service import (
     build_clarification_html,
     build_prd_html,
+    build_srs_html,
     render_html_to_pdf,
 )
 from app.workers.pdf_tasks import export_prd_pdf_task
@@ -110,5 +112,36 @@ async def export_prd_pdf_sync(
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="prd-{prd_id}-v{prd.version}.pdf"'
+        },
+    )
+
+
+@router.get("/srs/{srs_id}/export-pdf/sync")
+async def export_srs_pdf_sync(
+    srs_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("srs", "view")),
+) -> Response:
+    """Synchronously export an SRS as PDF."""
+    result = await db.execute(
+        select(SRS).where(SRS.id == srs_id, SRS.deleted_at.is_(None))
+    )
+    srs = result.scalar_one_or_none()
+    if srs is None or not srs.content_json:
+        raise HTTPException(status_code=404, detail="SRS content not found")
+
+    project_result = await db.execute(
+        select(Project).where(Project.id == srs.project_id)
+    )
+    project = project_result.scalar_one_or_none()
+    project_name = project.name if project else "Unknown project"
+
+    html = build_srs_html(srs.content_json, project_name, srs.version)
+    pdf_bytes = render_html_to_pdf(html)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="srs-{srs_id}-v{srs.version}.pdf"'
         },
     )

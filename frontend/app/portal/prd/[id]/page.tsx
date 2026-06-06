@@ -11,11 +11,10 @@ export default function PrdPortalPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!api.getAccessToken()) {
-      setError("Please log in as a client to review this PRD.");
-      return;
-    }
-    api.getPrd(id).then(setPrd).catch((e: Error) => setError(e.message));
+    api
+      .getPrd(id)
+      .then(setPrd)
+      .catch((e: Error) => setError(e.message || "Please log in as a client to review this PRD."));
   }, [id]);
 
   if (error) {

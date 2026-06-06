@@ -16,6 +16,7 @@ from app.schemas.spec import (
     SpecGenerateRequest,
     TaskSpecResponse,
 )
+from app.services.notification.service import create_notification
 from app.workers.spec_tasks import generate_spec_task
 
 router = APIRouter(prefix="/specs", tags=["Specs"])
@@ -38,7 +39,7 @@ def _to_spec_response(spec: TaskSpec) -> TaskSpecResponse:
 async def generate_spec(
     body: SpecGenerateRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_screen_permission("projects", "edit")),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
 ) -> dict[str, str]:
     """Queue technical spec generation for a task."""
     task_result = await db.execute(
@@ -87,7 +88,7 @@ async def generate_spec(
 async def get_spec(
     spec_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_screen_permission("projects", "view")),
+    current_user: User = Depends(require_screen_permission("tasks", "view")),
 ) -> TaskSpecResponse:
     """Return a task spec by id."""
     result = await db.execute(
@@ -106,7 +107,7 @@ async def get_spec(
 async def get_spec_by_task(
     task_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_screen_permission("projects", "view")),
+    current_user: User = Depends(require_screen_permission("tasks", "view")),
 ) -> TaskSpecResponse:
     """Return the task spec for a specific task."""
     result = await db.execute(
@@ -126,7 +127,7 @@ async def assign_spec(
     spec_id: UUID,
     body: SpecAssignRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_screen_permission("projects", "edit")),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
 ) -> TaskSpecResponse:
     """Assign a spec to a developer."""
     result = await db.execute(
@@ -142,4 +143,12 @@ async def assign_spec(
     spec.assigned_to_id = body.assigned_to_id
     await db.commit()
     await db.refresh(spec)
+
+    await create_notification(
+        db,
+        user_id=body.assigned_to_id,
+        title="Technical spec assigned",
+        message=f"A technical specification has been assigned to you.",
+        link=f"/tasks?spec={spec.id}",
+    )
     return _to_spec_response(spec)

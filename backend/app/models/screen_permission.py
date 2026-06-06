@@ -18,6 +18,9 @@ class ScreenKey(str, enum.Enum):
     requirements = "requirements"
     prds = "prds"
     srs = "srs"
+    tasks = "tasks"
+    knowledge_base = "knowledge_base"
+    decisions = "decisions"
     admin_users = "admin_users"
 
 

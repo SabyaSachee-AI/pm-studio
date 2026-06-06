@@ -32,12 +32,17 @@ def generate_srs_task(srs_id: str) -> dict[str, str]:
             db.commit()
             return {"error": "PRD has no content"}
 
-        srs_data = asyncio.run(
-            generate_srs_ai(
-                prd_content=prd.content_json,
-                project_name=project.name if project else "Unknown Project",
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            srs_data = loop.run_until_complete(
+                generate_srs_ai(
+                    prd_content=prd.content_json,
+                    project_name=project.name if project else "Unknown Project",
+                )
             )
-        )
+        finally:
+            loop.close()
 
         srs.content_json = srs_data.model_dump()
         srs.status = SRSStatus.draft
@@ -46,10 +51,10 @@ def generate_srs_task(srs_id: str) -> dict[str, str]:
         return {"srs_id": srs_id, "status": SRSStatus.draft.value}
 
     except Exception as exc:
-        logger.error("SRS generation failed: %s", exc)
+        logger.exception("SRS generation failed", extra={"srs_id": srs_id})
         if srs is not None:
             srs.status = SRSStatus.rejected
             db.commit()
-        return {"error": str(exc)}
+        return {"error": str(exc)[:500]}
     finally:
         db.close()

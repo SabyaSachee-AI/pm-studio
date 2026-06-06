@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import require_screen_permission
 from app.core.database import get_db
 from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/projects", tags=["Projects"])
 @router.get("", response_model=list[ProjectResponse])
 async def list_projects(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("projects", "view")),
 ) -> list[ProjectResponse]:
     """List all non-deleted projects."""
     projects = await get_projects(db)
@@ -35,7 +35,7 @@ async def list_projects(
 async def create_project_endpoint(
     data: ProjectCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("projects", "edit")),
 ) -> ProjectResponse:
     """Create a new project."""
     project = await create_project(db, data, current_user.id)
@@ -46,7 +46,7 @@ async def create_project_endpoint(
 async def list_projects_by_client(
     client_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("projects", "view")),
 ) -> list[ProjectResponse]:
     """List non-deleted projects for a client."""
     projects = await get_projects_by_client(db, client_id)
@@ -57,7 +57,7 @@ async def list_projects_by_client(
 async def get_project_endpoint(
     project_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("projects", "view")),
 ) -> ProjectResponse:
     """Return a single project by id."""
     project = await get_project_by_id(db, project_id)
@@ -74,7 +74,7 @@ async def update_project_endpoint(
     project_id: UUID,
     data: ProjectUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("projects", "edit")),
 ) -> ProjectResponse:
     """Partially update a project."""
     project = await get_project_by_id(db, project_id)
@@ -92,7 +92,7 @@ async def update_project_endpoint(
 async def delete_project_endpoint(
     project_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("projects", "edit")),
 ) -> None:
     """Soft-delete a project."""
     project = await get_project_by_id(db, project_id)

@@ -34,13 +34,18 @@ def generate_prd_task(prd_id: str) -> dict[str, str]:
             db.commit()
             return {"error": "Requirement not analyzed yet"}
 
-        prd_data = asyncio.run(
-            generate_prd_ai(
-                requirement_text=requirement.extracted_text or "",
-                analysis_result=requirement.analysis_result,
-                project_name=project.name if project else "Unknown Project",
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            prd_data = loop.run_until_complete(
+                generate_prd_ai(
+                    requirement_text=requirement.extracted_text or "",
+                    analysis_result=requirement.analysis_result,
+                    project_name=project.name if project else "Unknown Project",
+                )
             )
-        )
+        finally:
+            loop.close()
 
         prd.content_json = prd_data.model_dump()
         prd.status = PRDStatus.draft
@@ -49,10 +54,10 @@ def generate_prd_task(prd_id: str) -> dict[str, str]:
         return {"prd_id": prd_id, "status": PRDStatus.draft.value}
 
     except Exception as exc:
-        logger.error("PRD generation failed: %s", exc)
+        logger.exception("PRD generation failed", extra={"prd_id": prd_id})
         if prd is not None:
             prd.status = PRDStatus.rejected
             db.commit()
-        return {"error": str(exc)}
+        return {"error": str(exc)[:500]}
     finally:
         db.close()

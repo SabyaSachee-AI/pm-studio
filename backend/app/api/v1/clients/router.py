@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import require_screen_permission
 from app.core.database import get_db
 from app.models.user import User
 from app.schemas.client import ClientCreate, ClientResponse, ClientUpdate
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/clients", tags=["Clients"])
 @router.get("", response_model=list[ClientResponse])
 async def list_clients(
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("clients", "view")),
 ) -> list[ClientResponse]:
     """List all non-deleted clients."""
     clients = await get_clients(db)
@@ -34,7 +34,7 @@ async def list_clients(
 async def create_client_endpoint(
     data: ClientCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("clients", "edit")),
 ) -> ClientResponse:
     """Create a new client."""
     client = await create_client(db, data, current_user.id)
@@ -45,7 +45,7 @@ async def create_client_endpoint(
 async def get_client_endpoint(
     client_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("clients", "view")),
 ) -> ClientResponse:
     """Return a single client by id."""
     client = await get_client_by_id(db, client_id)
@@ -62,7 +62,7 @@ async def update_client_endpoint(
     client_id: UUID,
     data: ClientUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("clients", "edit")),
 ) -> ClientResponse:
     """Partially update a client."""
     client = await get_client_by_id(db, client_id)
@@ -80,7 +80,7 @@ async def update_client_endpoint(
 async def delete_client_endpoint(
     client_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_screen_permission("clients", "edit")),
 ) -> None:
     """Soft-delete a client."""
     client = await get_client_by_id(db, client_id)

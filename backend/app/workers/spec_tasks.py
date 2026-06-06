@@ -44,16 +44,21 @@ def generate_spec_task(task_spec_id: str) -> dict[str, str]:
         task_spec.status = TaskSpecStatus.generating
         db.commit()
 
-        spec_data = asyncio.run(
-            generate_spec_ai(
-                task_title=task.title,
-                task_description=task.description or "",
-                module_name=task.module_name or "",
-                fr_references=task.fr_references or [],
-                srs_content=srs_content,
-                project_name=project.name if project else "Unknown",
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            spec_data = loop.run_until_complete(
+                generate_spec_ai(
+                    task_title=task.title,
+                    task_description=task.description or "",
+                    module_name=task.module_name or "",
+                    fr_references=task.fr_references or [],
+                    srs_content=srs_content,
+                    project_name=project.name if project else "Unknown",
+                )
             )
-        )
+        finally:
+            loop.close()
 
         task_spec.content_json = spec_data.model_dump()
         task_spec.status = TaskSpecStatus.ready
@@ -62,10 +67,13 @@ def generate_spec_task(task_spec_id: str) -> dict[str, str]:
         return {"task_spec_id": task_spec_id, "status": TaskSpecStatus.ready.value}
 
     except Exception as exc:
-        logger.error("Spec generation failed: %s", exc)
+        logger.exception(
+            "Spec generation failed",
+            extra={"task_spec_id": task_spec_id},
+        )
         if task_spec is not None:
             task_spec.status = TaskSpecStatus.failed
             db.commit()
-        return {"error": str(exc)}
+        return {"error": str(exc)[:500]}
     finally:
         db.close()

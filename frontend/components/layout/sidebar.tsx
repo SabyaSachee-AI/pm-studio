@@ -2,19 +2,32 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { api, type ScreenPermission } from "@/lib/api";
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/clients", label: "Clients" },
-  { href: "/projects", label: "Projects" },
-  { href: "/requirements", label: "Requirements" },
-  { href: "/prds", label: "PRDs" },
-  { href: "/srs", label: "SRS" },
-  { href: "/admin/users", label: "Users" },
+  { href: "/dashboard", screen: "dashboard", label: "Dashboard" },
+  { href: "/clients", screen: "clients", label: "Clients" },
+  { href: "/projects", screen: "projects", label: "Projects" },
+  { href: "/requirements", screen: "requirements", label: "Requirements" },
+  { href: "/prds", screen: "prds", label: "PRDs" },
+  { href: "/srs", screen: "srs", label: "SRS" },
+  { href: "/tasks", screen: "tasks", label: "Kanban" },
+  { href: "/knowledge", screen: "knowledge_base", label: "Knowledge" },
+  { href: "/decisions", screen: "decisions", label: "Decisions" },
+  { href: "/admin/users", screen: "admin_users", label: "Users" },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [screens, setScreens] = useState<ScreenPermission[]>([]);
+
+  useEffect(() => {
+    api.getScreens().then(setScreens).catch(() => setScreens([]));
+  }, []);
+
+  const allowed = new Set(screens.map((s) => s.screen_key));
+
   return (
     <aside className="flex h-full w-56 flex-col border-r border-gray-800 bg-gray-950">
       <div className="border-b border-gray-800 px-4 py-5">
@@ -22,7 +35,9 @@ export function Sidebar() {
         <p className="text-xs text-gray-500">AI project management</p>
       </div>
       <nav className="flex-1 space-y-1 p-3">
-        {NAV_ITEMS.map((item) => {
+        {NAV_ITEMS.filter(
+          (item) => screens.length === 0 || allowed.has(item.screen),
+        ).map((item) => {
           const active = pathname.startsWith(item.href);
           return (
             <Link
