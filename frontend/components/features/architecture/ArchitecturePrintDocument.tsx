@@ -15,12 +15,12 @@ export type ArchDocKey = (typeof DOC_TAB_META)[number]["key"];
 
 const PDF_STYLES = `
   .arch-pdf-root { width: 210mm; box-sizing: border-box; font-family: "Segoe UI", Calibri, Arial, sans-serif; font-size: 11pt; color: #111; background: #fff; }
-  .arch-pdf-cover { min-height: 250mm; display: flex; flex-direction: column; justify-content: center; padding: 40mm 20mm; }
-  .arch-pdf-cover h1 { font-size: 28pt; margin: 0 0 12pt; }
-  .arch-pdf-cover p { font-size: 12pt; color: #444; margin: 4pt 0; }
-  .arch-pdf-section { padding: 15mm 20mm; page-break-before: always; }
+  .arch-pdf-cover { min-height: 250mm; display: flex; flex-direction: column; justify-content: center; padding: 20mm 20mm 20mm 25mm; }
+  .arch-pdf-cover h1 { font-size: 24pt; margin: 0 0 12pt; }
+  .arch-pdf-cover p { font-size: 11pt; color: #444; margin: 4pt 0; }
+  .arch-pdf-section { padding: 20mm 20mm 20mm 25mm; page-break-before: always; }
   .arch-pdf-section:first-of-type { page-break-before: auto; }
-  .arch-pdf-section h2 { font-size: 16pt; border-bottom: 1px solid #ccc; padding-bottom: 6pt; margin: 0 0 12pt; }
+  .arch-pdf-section h2 { font-size: 14pt; border-bottom: 1px solid #ccc; padding-bottom: 6pt; margin: 0 0 12pt; }
   .arch-pdf-section h3 { font-size: 12pt; margin: 14pt 0 6pt; }
   .arch-pdf-section p { line-height: 1.5; margin: 0 0 8pt; }
   .arch-pdf-diagram { margin: 12pt 0; text-align: center; }
@@ -115,11 +115,11 @@ export function ArchitecturePrintDocument({
       <style>{PDF_STYLES}</style>
       {mode === "full" ? (
         <div className="arch-pdf-cover">
-          <h1>Technical architecture document</h1>
+          <h1>Architecture suite</h1>
           <p>Project: {projectName}</p>
           <p>Version: v{arch.version}</p>
           <p>Status: {arch.status}</p>
-          <p>Date: {new Date().toLocaleDateString()}</p>
+          <p>Generated: {new Date().toLocaleDateString()}</p>
         </div>
       ) : (
         <div className="arch-pdf-cover" style={{ minHeight: "80mm" }}>

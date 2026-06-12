@@ -9,14 +9,21 @@ from app.core.database import SyncSessionLocal
 from app.models.prd import PRD
 from app.models.project import Project
 from app.models.srs import SRS, SRSStatus
+from app.services.ai.model_override import clear_model_override, set_model_override
+from app.services.ai.srs_service import enrich_srs_content
 from app.services.srs.service import generate_srs_ai
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="srs.generate")
-def generate_srs_task(srs_id: str) -> dict[str, str]:
+def generate_srs_task(
+    srs_id: str,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, str]:
     """Background task to generate SRS from approved PRD."""
+    set_model_override(model_provider, model_id)
     db = SyncSessionLocal()
     srs: SRS | None = None
     try:
@@ -44,7 +51,7 @@ def generate_srs_task(srs_id: str) -> dict[str, str]:
         finally:
             loop.close()
 
-        srs.content_json = srs_data.model_dump()
+        srs.content_json = enrich_srs_content(srs_data.model_dump())
         srs.status = SRSStatus.draft
         db.commit()
 
@@ -58,3 +65,4 @@ def generate_srs_task(srs_id: str) -> dict[str, str]:
         return {"error": str(exc)[:500]}
     finally:
         db.close()
+        clear_model_override()

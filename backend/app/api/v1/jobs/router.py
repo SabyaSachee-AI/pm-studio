@@ -22,7 +22,6 @@ async def get_job_status(task_id: str) -> dict:
     elif result.status == "FAILURE":
         response["error"] = str(result.result)
     elif result.status == "PROGRESS":
-        # Return meta so frontend can show current model, doc progress, etc.
         response["meta"] = result.info or {}
     return response
 
@@ -39,6 +38,8 @@ async def stream_job_status(task_id: str) -> StreamingResponse:
                 payload["result"] = result.result
             elif result.status == "FAILURE":
                 payload["error"] = str(result.result)
+            elif result.status == "PROGRESS":
+                payload["meta"] = result.info or {}
             yield f"data: {json.dumps(payload)}\n\n"
             if result.ready():
                 break

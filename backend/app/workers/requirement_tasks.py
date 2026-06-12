@@ -10,6 +10,7 @@ from app.models.requirement import Requirement, RequirementStatus
 from app.schemas.requirement import RequirementAnalysisSchema
 from app.services.requirement.cost import estimate_cost
 from app.services.requirement.service import analyze_requirements_ai, extract_text_from_pdf
+from app.services.ai.model_override import clear_model_override, set_model_override
 from app.services.storage.service import get_local_path
 
 logger = logging.getLogger(__name__)
@@ -24,8 +25,13 @@ def _merge_text(original: str, feedback: str) -> str:
 
 
 @celery_app.task(name="requirements.process_upload")
-def process_requirement_task(requirement_id: str) -> None:
+def process_requirement_task(
+    requirement_id: str,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+) -> None:
     """Background task to extract text and run AI analysis."""
+    set_model_override(model_provider, model_id)
     db = SyncSessionLocal()
     req: Requirement | None = None
     try:
@@ -76,3 +82,4 @@ def process_requirement_task(requirement_id: str) -> None:
             db.commit()
     finally:
         db.close()
+        clear_model_override()

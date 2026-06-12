@@ -7,6 +7,10 @@ class FreeModeUpdate(BaseModel):
     enabled: bool
 
 
+class AiTierUpdate(BaseModel):
+    tier: str  # "free" | "low_cost" | "premium"
+
+
 class ScreenOverrideUpdate(BaseModel):
     screen: str
     provider: str | None = None
@@ -24,6 +28,16 @@ class ProviderStatus(BaseModel):
     configured: bool
     is_enabled: bool
     masked_key: str | None = None
+
+
+class ProviderUsage(BaseModel):
+    requests: int = 0
+    tokens_in: int = 0
+    tokens_out: int = 0
+    requests_limit: int = 0
+    tokens_limit: int = 0
+    label: str = ""
+    color: str = "gray"
 
 
 class RoutingRow(BaseModel):
@@ -44,11 +58,15 @@ class ScreenModelInfo(BaseModel):
 
 
 class AiConfigResponse(BaseModel):
+    ai_tier: str
     free_mode_enabled: bool
     providers: list[ProviderStatus]
     paid_routing: list[RoutingRow]
     free_routing: list[RoutingRow]
+    low_cost_routing: list[RoutingRow] = Field(default_factory=list)
     screen_overrides: dict[str, dict[str, str]]
     screen_models: list[ScreenModelInfo] = Field(default_factory=list)
     paid_model_options: list[dict[str, str]] = Field(default_factory=list)
     free_model_options: list[dict[str, str]] = Field(default_factory=list)
+    low_cost_model_options: list[dict[str, str]] = Field(default_factory=list)
+    daily_usage: dict[str, ProviderUsage] = Field(default_factory=dict)

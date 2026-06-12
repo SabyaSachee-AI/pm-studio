@@ -1,5 +1,6 @@
 """Technical task specification API endpoints."""
 
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -38,6 +39,8 @@ def _to_spec_response(spec: TaskSpec) -> TaskSpecResponse:
 @router.post("/generate", status_code=status.HTTP_202_ACCEPTED)
 async def generate_spec(
     body: SpecGenerateRequest,
+    model_provider: str | None = None,
+    model_id: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_screen_permission("tasks", "edit")),
 ) -> dict[str, str]:
@@ -79,7 +82,11 @@ async def generate_spec(
     await db.commit()
     await db.refresh(task_spec)
 
-    celery_task = generate_spec_task.delay(str(task_spec.id))
+    celery_task = generate_spec_task.delay(
+        str(task_spec.id),
+        model_provider=model_provider,
+        model_id=model_id,
+    )
     task_spec.generation_task_id = celery_task.id
     await db.commit()
 
@@ -158,3 +165,42 @@ async def assign_spec(
         link=f"/tasks?spec={spec.id}",
     )
     return _to_spec_response(spec)
+
+
+@router.post("/{spec_id}/regenerate", status_code=status.HTTP_202_ACCEPTED)
+async def regenerate_spec(
+    spec_id: UUID,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> dict[str, str]:
+    """Re-queue technical spec generation."""
+    result = await db.execute(
+        select(TaskSpec).where(
+            TaskSpec.id == spec_id,
+            TaskSpec.deleted_at.is_(None),
+        )
+    )
+    spec = result.scalar_one_or_none()
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Spec not found")
+
+    spec.content_json = None
+    spec.status = TaskSpecStatus.pending
+    await db.commit()
+
+    celery_task = generate_spec_task.delay(
+        str(spec.id),
+        model_provider=model_provider,
+        model_id=model_id,
+    )
+    spec.generation_task_id = celery_task.id
+    await db.commit()
+
+    return {
+        "spec_id": str(spec.id),
+        "task_id": str(spec.task_id),
+        "task_id_celery": celery_task.id,
+        "status": "regenerating",
+    }

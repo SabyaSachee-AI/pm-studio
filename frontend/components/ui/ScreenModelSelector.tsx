@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type AiConfigResponse, type ScreenModelInfo } from "@/lib/api";
+import { api, type AiConfigResponse, type AiModelOption, type ScreenModelInfo } from "@/lib/api";
 
 type ScreenKey = "requirements" | "prds" | "srs" | "architecture" | "tasks";
 
@@ -10,8 +10,70 @@ interface ScreenModelSelectorProps {
   className?: string;
 }
 
+const GROUP_SECTIONS: Array<{
+  key: "paid" | "low_cost" | "free";
+  label: string;
+  colorClass: string;
+  icon: string;
+  optionsKey: keyof Pick<
+    AiConfigResponse,
+    "paid_model_options" | "low_cost_model_options" | "free_model_options"
+  >;
+}> = [
+  {
+    key: "paid",
+    label: "Paid",
+    colorClass: "text-orange-400",
+    icon: "🟠",
+    optionsKey: "paid_model_options",
+  },
+  {
+    key: "low_cost",
+    label: "Low cost",
+    colorClass: "text-amber-400",
+    icon: "💰",
+    optionsKey: "low_cost_model_options",
+  },
+  {
+    key: "free",
+    label: "Free",
+    colorClass: "text-green-400",
+    icon: "🆓",
+    optionsKey: "free_model_options",
+  },
+];
+
 function stars(count: number): string {
   return "⭐".repeat(Math.min(5, Math.max(1, count)));
+}
+
+function ModelOptionButton({
+  opt,
+  selected,
+  icon,
+  onSelect,
+}: {
+  opt: AiModelOption;
+  selected: boolean;
+  icon: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`mb-1 flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm hover:bg-gray-900 ${
+        selected ? "bg-gray-900 ring-1 ring-blue-600" : ""
+      }`}
+    >
+      <span>
+        {selected ? "●" : "○"} {icon} {opt.label}
+      </span>
+      <span className="text-xs text-gray-500">
+        {opt.tier} {opt.cost}
+      </span>
+    </button>
+  );
 }
 
 export function ScreenModelSelector({ screen, className = "" }: ScreenModelSelectorProps) {
@@ -84,18 +146,13 @@ export function ScreenModelSelector({ screen, className = "" }: ScreenModelSelec
 
   if (!config || !current) return null;
 
-  const isFree = config.free_mode_enabled || current.model.includes(":free");
-  const icon = isFree ? "🆓" : "🤖";
-  const options = config.free_mode_enabled
-    ? config.free_model_options
-    : [...config.paid_model_options, ...config.free_model_options];
+  const isOverride = current.source === "override";
+  const displayLabel = isOverride ? current.label : "Auto";
 
   return (
     <div ref={dropdownRef} className={`relative ${className}`}>
       <div className="flex items-center gap-2 rounded-lg border border-gray-700 bg-gray-900/80 px-3 py-1.5 text-sm">
-        <span>
-          {icon} {current.label}
-        </span>
+        <span>{displayLabel}</span>
         {canEdit ? (
           <button
             type="button"
@@ -109,79 +166,51 @@ export function ScreenModelSelector({ screen, className = "" }: ScreenModelSelec
       </div>
 
       {open ? (
-        <div className="absolute right-0 z-50 mt-2 w-80 rounded-xl border border-gray-700 bg-gray-950 p-3 shadow-xl">
+        <div className="absolute right-0 z-50 mt-2 max-h-[28rem] w-80 overflow-y-auto rounded-xl border border-gray-700 bg-gray-950 p-3 shadow-xl">
           <p className="mb-2 text-xs font-medium text-gray-400">
-            Model for this screen (overrides global setting)
+            Model for this screen
           </p>
+
+          <button
+            type="button"
+            onClick={() => void clearOverride()}
+            className={`mb-3 flex w-full items-center rounded-md px-2 py-1.5 text-left text-sm hover:bg-gray-900 ${
+              !isOverride ? "bg-gray-900 ring-1 ring-blue-600" : ""
+            }`}
+          >
+            {!isOverride ? "●" : "○"} Auto
+          </button>
+
           <div className="mb-2 border-t border-gray-800" />
 
-          {!config.free_mode_enabled ? (
-            <>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-orange-400">
-                Paid models
-              </p>
-              {config.paid_model_options.map((opt) => {
-                const selected =
-                  current.provider === opt.provider && current.model === opt.model;
-                return (
-                  <button
-                    key={`${opt.provider}-${opt.model}`}
-                    type="button"
-                    onClick={() => selectModel(opt.provider, opt.model)}
-                    className={`mb-1 flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm hover:bg-gray-900 ${
-                      selected ? "bg-gray-900 ring-1 ring-orange-600" : ""
-                    }`}
-                  >
-                    <span>
-                      {selected ? "●" : "○"} 🟠 {opt.label}
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      {opt.tier} {opt.cost}
-                    </span>
-                  </button>
-                );
-              })}
-              <p className="mb-1 mt-3 text-xs font-semibold uppercase tracking-wide text-blue-400">
-                Free models (OpenRouter)
-              </p>
-            </>
-          ) : (
-            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-green-400">
-              Free models
-            </p>
-          )}
-
-          {(config.free_mode_enabled ? config.free_model_options : config.free_model_options).map(
-            (opt) => {
-              const selected =
-                current.provider === opt.provider && current.model === opt.model;
-              return (
-                <button
-                  key={`free-${opt.provider}-${opt.model}`}
-                  type="button"
-                  onClick={() => selectModel(opt.provider, opt.model)}
-                  className={`mb-1 flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm hover:bg-gray-900 ${
-                    selected ? "bg-gray-900 ring-1 ring-green-600" : ""
-                  }`}
+          {GROUP_SECTIONS.map((section) => {
+            const opts = config[section.optionsKey] ?? [];
+            if (opts.length === 0) return null;
+            return (
+              <div key={section.key} className="mb-3">
+                <p
+                  className={`mb-1 text-xs font-semibold uppercase tracking-wide ${section.colorClass}`}
                 >
-                  <span>
-                    {selected ? "●" : "○"} 🆓 {opt.label}
-                  </span>
-                  <span className="text-xs text-gray-500">{opt.tier}</span>
-                </button>
-              );
-            },
-          )}
-
-          {current.source === "override" ? (
-            <button
-              type="button"
-              onClick={clearOverride}
-              className="mt-2 w-full rounded-md border border-gray-700 px-2 py-1.5 text-xs text-gray-400 hover:bg-gray-900"
-            >
-              Use global default
-            </button>
-          ) : null}
+                  {section.label}
+                </p>
+                {opts.map((opt) => {
+                  const selected =
+                    isOverride &&
+                    current.provider === opt.provider &&
+                    current.model === opt.model;
+                  return (
+                    <ModelOptionButton
+                      key={`${section.key}-${opt.provider}-${opt.model}`}
+                      opt={opt}
+                      selected={selected}
+                      icon={section.icon}
+                      onSelect={() => void selectModel(opt.provider, opt.model)}
+                    />
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </div>

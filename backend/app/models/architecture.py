@@ -11,6 +11,28 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import TimeStampedModel
 
+DOC_FIELDS = (
+    "doc_system_arch",
+    "doc_database",
+    "doc_api",
+    "doc_frontend",
+    "doc_security",
+    "doc_uiux",
+)
+
+DOC_STATUS_FIELDS = tuple(f"{field}_status" for field in DOC_FIELDS)
+
+
+class DocGenerationStatus(enum.Enum):
+    """Per-document generation lifecycle."""
+
+    pending = "pending"
+    generating = "generating"
+    completed = "completed"
+    failed = "failed"
+    generated = "generated"
+    saved = "saved"
+
 
 class ArchitectureStatus(enum.Enum):
     """Lifecycle status for an architecture suite."""

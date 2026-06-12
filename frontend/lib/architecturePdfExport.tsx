@@ -3,8 +3,8 @@ import {
   type ArchDocKey,
 } from "@/components/features/architecture/ArchitecturePrintDocument";
 import { buildArchitecturePdf } from "@/lib/architecturePdfBuilder";
-import { renderMermaidSvg } from "@/lib/renderMermaidSvg";
-import { svgStringToPngDataUrl, type SvgPngImage } from "@/lib/svgToPdfImage";
+import { initMermaidForPdf, renderMermaidPng } from "@/lib/renderMermaidSvg";
+import { rasterizeSvgForPdf, type SvgPngImage } from "@/lib/svgToPdfImage";
 
 export type ArchitecturePdfMode = "full" | "section";
 
@@ -43,20 +43,11 @@ function slugFilename(value: string): string {
   return value.replace(/[^\w.-]+/g, "-").replace(/-+/g, "-").slice(0, 80);
 }
 
-function isErrorSvg(svg: string): boolean {
-  return (
-    svg.includes('aria-roledescription="error"') ||
-    svg.includes("Syntax error in text") ||
-    svg.includes("Parse error on line") ||
-    svg.includes('class="mermaid-error"')
-  );
-}
-
 function scrapeDiagramSvg(diagramId: string): string {
   const svg = document.querySelector(`[data-diagram-id="${diagramId}"] svg`);
   if (!svg) return "";
   const html = svg.outerHTML;
-  return isErrorSvg(html) ? "" : html;
+  return html.includes('aria-roledescription="error"') ? "" : html;
 }
 
 async function collectDiagramImages(
@@ -83,27 +74,21 @@ async function collectDiagramImages(
 
   if (jobs.length === 0) return {};
 
+  initMermaidForPdf();
   const images: DiagramImageMap = {};
-  let done = 0;
 
-  await Promise.all(
-    jobs.map(async ({ mapKey, chart, diagramId }) => {
-      onProgress?.(`Rendering diagram ${done + 1}/${jobs.length}…`);
+  // Sequential render — mermaid uses global state; parallel calls corrupt each other.
+  for (let i = 0; i < jobs.length; i += 1) {
+    const { mapKey, chart, diagramId } = jobs[i];
+    onProgress?.(`Rendering diagram ${i + 1}/${jobs.length}…`);
 
-      let svg = await renderMermaidSvg(chart, mapKey);
-      if (!svg) {
-        svg = scrapeDiagramSvg(diagramId);
-      }
-      if (!svg) {
-        done += 1;
-        return;
-      }
-
-      const png = await svgStringToPngDataUrl(svg, 3);
-      if (png) images[mapKey] = png;
-      done += 1;
-    }),
-  );
+    let png = await renderMermaidPng(chart, mapKey, 2);
+    if (!png) {
+      const svg = scrapeDiagramSvg(diagramId);
+      if (svg) png = await rasterizeSvgForPdf(svg, 2);
+    }
+    if (png) images[mapKey] = png;
+  }
 
   return images;
 }

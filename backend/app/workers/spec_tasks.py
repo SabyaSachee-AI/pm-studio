@@ -10,14 +10,20 @@ from app.models.project import Project
 from app.models.srs import SRS
 from app.models.task import Task
 from app.models.task_spec import TaskSpec, TaskSpecStatus
+from app.services.ai.model_override import clear_model_override, set_model_override
 from app.services.spec.service import generate_spec_ai
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="spec.generate")
-def generate_spec_task(task_spec_id: str) -> dict[str, str]:
+def generate_spec_task(
+    task_spec_id: str,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, str]:
     """Background task to generate a technical spec for a task."""
+    set_model_override(model_provider, model_id)
     db = SyncSessionLocal()
     task_spec: TaskSpec | None = None
     try:
@@ -77,3 +83,4 @@ def generate_spec_task(task_spec_id: str) -> dict[str, str]:
         return {"error": str(exc)[:500]}
     finally:
         db.close()
+        clear_model_override()

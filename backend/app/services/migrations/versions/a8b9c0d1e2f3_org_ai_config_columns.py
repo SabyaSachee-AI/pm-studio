@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "a8b9c0d1e2f3"
-down_revision: Union[str, Sequence[str], None] = "f7a8b9c0d1e2"
+down_revision: Union[str, Sequence[str], None] = "d5e6f7a8b9c0"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

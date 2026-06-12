@@ -1,3 +1,5 @@
+import html2canvas from "html2canvas";
+
 export interface SvgPngImage {
   dataUrl: string;
   widthPx: number;
@@ -5,70 +7,81 @@ export interface SvgPngImage {
   aspectRatio: number;
 }
 
-function parseSvgDimensions(svg: string): { width: number; height: number } {
+/** Prepare SVG for rasterization — keep labels (foreignObject/text); fix dimensions only. */
+function prepareSvgForRaster(svg: string): { markup: string; width: number; height: number } {
   const parser = new DOMParser();
   const doc = parser.parseFromString(svg, "image/svg+xml");
   const el = doc.documentElement;
+
+  if (!el.getAttribute("xmlns")) {
+    el.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  }
+
   const viewBox = el.getAttribute("viewBox")?.trim().split(/\s+/).map(Number);
-  let width = parseFloat(el.getAttribute("width")?.replace(/px$/, "") ?? "0");
-  let height = parseFloat(el.getAttribute("height")?.replace(/px$/, "") ?? "0");
-
+  let width = 900;
+  let height = 600;
   if (viewBox && viewBox.length === 4) {
-    if (!width) width = viewBox[2];
-    if (!height) height = viewBox[3];
+    width = viewBox[2];
+    height = viewBox[3];
+    el.setAttribute("width", String(width));
+    el.setAttribute("height", String(height));
   }
 
-  if (!width || !height || !Number.isFinite(width) || !Number.isFinite(height)) {
-    return { width: 900, height: 600 };
-  }
-  return { width, height };
+  el.removeAttribute("style");
+
+  const markup = new XMLSerializer().serializeToString(el);
+  return { markup, width, height };
 }
 
-function prepareSvgForRaster(svg: string): string {
-  let prepared = svg.trim();
-  if (!prepared.includes('xmlns="http://www.w3.org/2000/svg"')) {
-    prepared = prepared.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"');
-  }
-  if (!prepared.includes("<rect") || !prepared.includes('fill="#ffffff"')) {
-    prepared = prepared.replace(
-      /<svg([^>]*)>/,
-      '<svg$1><rect width="100%" height="100%" fill="#ffffff"/>',
-    );
-  }
-  return prepared;
-}
 
-/** Rasterize an SVG string to a crisp PNG data URL for PDF embedding. */
-export async function svgStringToPngDataUrl(
+export async function rasterizeSvgForPdf(
   svg: string,
-  scale = 2.5,
+  scale = 2,
 ): Promise<SvgPngImage | null> {
   if (!svg.trim()) return null;
 
-  const { width, height } = parseSvgDimensions(svg);
-  const prepared = prepareSvgForRaster(svg);
-  const blob = new Blob([prepared], { type: "image/svg+xml;charset=utf-8" });
-  const objectUrl = URL.createObjectURL(blob);
+  const { markup, width, height } = prepareSvgForRaster(svg);
+
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("sandbox", "allow-same-origin");
+  iframe.style.cssText =
+    "position:fixed;left:-10000px;top:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none;";
+  document.body.appendChild(iframe);
+
+  const doc = iframe.contentDocument;
+  if (!doc) {
+    iframe.remove();
+    return null;
+  }
+
+  doc.open();
+  doc.write(
+    '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+      "<style>html,body{margin:0;padding:12px;background:#ffffff;}</style>" +
+      "</head><body></body></html>",
+  );
+  doc.close();
+
+  const host = doc.createElement("div");
+  host.style.cssText = `display:inline-block;background:#ffffff;width:${width}px;`;
+  host.innerHTML = markup;
+  doc.body.appendChild(host);
+
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
 
   try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error("SVG rasterization failed"));
-      image.src = objectUrl;
+    const canvas = await html2canvas(host, {
+      backgroundColor: "#ffffff",
+      scale,
+      logging: false,
+      useCORS: true,
+      width: Math.ceil(width + 24),
+      height: Math.ceil(height + 24),
     });
 
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.ceil(width * scale);
-    canvas.height = Math.ceil(height * scale);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    if (!canvas.width || !canvas.height) return null;
 
     return {
       dataUrl: canvas.toDataURL("image/png"),
@@ -79,6 +92,14 @@ export async function svgStringToPngDataUrl(
   } catch {
     return null;
   } finally {
-    URL.revokeObjectURL(objectUrl);
+    iframe.remove();
   }
+}
+
+/** @deprecated Use rasterizeSvgForPdf — Image() cannot render foreignObject labels. */
+export async function svgStringToPngDataUrl(
+  svg: string,
+  scale = 2,
+): Promise<SvgPngImage | null> {
+  return rasterizeSvgForPdf(svg, scale);
 }

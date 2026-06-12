@@ -2,21 +2,8 @@
 
 import mermaid from "mermaid";
 import { useEffect, useId, useRef } from "react";
+import { initMermaidForUi } from "@/lib/mermaidRuntime";
 import { sanitizeMermaid } from "@/lib/mermaidSanitize";
-
-let initialized = false;
-
-function ensureMermaid(): void {
-  if (initialized) return;
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: "dark",
-    securityLevel: "loose",
-    er: { diagramPadding: 20 },
-    flowchart: { curve: "basis", htmlLabels: true },
-  });
-  initialized = true;
-}
 
 export function MermaidDiagram({ chart, id }: { chart: string; id: string }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -29,7 +16,7 @@ export function MermaidDiagram({ chart, id }: { chart: string; id: string }) {
     const sanitized = sanitizeMermaid(chart);
     if (!sanitized) return;
 
-    ensureMermaid();
+    initMermaidForUi();
     mermaid
       .render(renderId, sanitized)
       .then(({ svg }) => {

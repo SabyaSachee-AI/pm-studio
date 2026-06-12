@@ -9,15 +9,28 @@ import type {
   ArchitecturePdfMode,
   DiagramImageMap,
 } from "@/lib/architecturePdfExport";
+import { buildDiagramExplanation, buildDiagramStory } from "@/lib/diagramExplanations";
 
-const MARGIN = { top: 28, right: 18, bottom: 22, left: 18 };
+const MARGIN = { top: 20, right: 20, bottom: 20, left: 25 };
 const PAGE_W = 210;
 const PAGE_H = 297;
 const CONTENT_W = PAGE_W - MARGIN.left - MARGIN.right;
 const HEADER_COLOR: [number, number, number] = [30, 58, 95];
 const ACCENT: [number, number, number] = [59, 130, 246];
 const PX_TO_MM = 25.4 / 96;
-const WIDE_ASPECT_RATIO = 1.25;
+
+/** Keep narrative text short and implementation-focused. */
+function conciseText(text: string, maxLen = 420): string {
+  const trimmed = text.replace(/\s+/g, " ").trim();
+  if (trimmed.length <= maxLen) return trimmed;
+  const cut = trimmed.slice(0, maxLen);
+  const lastStop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("; "));
+  return (lastStop > 120 ? cut.slice(0, lastStop + 1) : cut).trim() + "…";
+}
+
+function trimList<T>(items: T[], max = 12): T[] {
+  return items.length <= max ? items : items.slice(0, max);
+}
 
 type JsPdfDoc = jsPDF & { lastAutoTable?: { finalY: number } };
 
@@ -61,24 +74,6 @@ function normalizeTechStack(
       reason: String(row.reason ?? ""),
     };
   });
-}
-
-function flattenFolder(node: unknown, prefix = ""): string[] {
-  if (node === null || node === undefined) return [];
-  if (typeof node === "string" || typeof node === "number" || typeof node === "boolean") {
-    return [`${prefix}${node}`];
-  }
-  if (Array.isArray(node)) {
-    return node.flatMap((item) => flattenFolder(item, `${prefix}  `));
-  }
-  if (typeof node === "object") {
-    return Object.entries(node as Record<string, unknown>).flatMap(([name, child]) => {
-      const line = `${prefix}${name}`;
-      const children = flattenFolder(child, `${prefix}  `);
-      return children.length > 0 ? [line, ...children] : [line];
-    });
-  }
-  return [];
 }
 
 function humanize(value: string): string {
@@ -155,10 +150,10 @@ class PdfWriter {
     this.doc.setTextColor(255, 255, 255);
     this.doc.setFont("helvetica", "bold");
     this.doc.setFontSize(11);
-    this.doc.text("PM STUDIO — TECHNICAL ARCHITECTURE REPORT", PAGE_W / 2, 18, { align: "center" });
+    this.doc.text("PM STUDIO — ARCHITECTURE SUITE", PAGE_W / 2, 18, { align: "center" });
     this.doc.setFontSize(9);
     this.doc.setFont("helvetica", "normal");
-    this.doc.text("Formal architecture suite documentation", PAGE_W / 2, 28, { align: "center" });
+    this.doc.text("Formal technical architecture report", PAGE_W / 2, 28, { align: "center" });
 
     this.y = 62;
     this.doc.setTextColor(...HEADER_COLOR);
@@ -182,11 +177,11 @@ class PdfWriter {
     this.y += 20;
 
     const infoRows = [
-      ["Document version", `v${this.meta.version}`],
-      ["Document status", String(this.meta.status).toUpperCase()],
-      ["Issue date", new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })],
-      ["Classification", "Internal — Technical"],
-      ...(this.meta.displayName ? [["Suite name", this.meta.displayName]] : []),
+      ["Project", this.meta.projectName],
+      ["Document", this.meta.docTitle],
+      ["Version", `v${this.meta.version}`],
+      ["Status", String(this.meta.status).toUpperCase()],
+      ["Date", new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })],
     ] as string[][];
 
     autoTable(this.doc, {
@@ -201,46 +196,33 @@ class PdfWriter {
       },
     });
 
-    this.y = (this.doc.lastAutoTable?.finalY ?? this.y) + 20;
-    this.doc.setFont("helvetica", "italic");
-    this.doc.setFontSize(9);
-    this.doc.setTextColor(100, 116, 139);
-    this.doc.text(
-      "This document describes the complete technical architecture for the project named above.",
-      PAGE_W / 2,
-      PAGE_H - 35,
-      { align: "center", maxWidth: CONTENT_W },
-    );
+    this.y = (this.doc.lastAutoTable?.finalY ?? this.y) + 12;
     this.doc.setTextColor(0, 0, 0);
     this.doc.setFont("helvetica", "normal");
   }
 
+  /** Compact TOC only — skipped for single-section exports. */
+  tableOfContentsPage(sectionTitles: string[]): void {
+    if (this.meta.mode === "section") return;
+
+    this.newPage();
+    this.pageHeading("Contents", false);
+    this.y += 2;
+
+    sectionTitles.forEach((title, i) => {
+      this.doc.setFont("helvetica", "normal");
+      this.doc.setFontSize(10.5);
+      this.doc.setTextColor(30, 41, 59);
+      this.doc.text(`${i + 1}. ${title}`, MARGIN.left, this.y);
+      this.y += 7;
+    });
+
+    this.tocPage = 0;
+  }
+
   documentControlPage(): void {
-    this.newPage();
-    this.y = MARGIN.top;
-    this.pageHeading("Document control", false);
-
-    this.subsection("Purpose", "This report consolidates all architecture suite deliverables into a single formal document suitable for technical review, implementation, and sign-off.");
-
-    this.subsection("Scope", this.meta.mode === "full"
-      ? "Full architecture suite: system architecture, database design, API specification, frontend architecture, security and RBAC, and UI/UX guidance."
-      : `Single section export: ${this.meta.docTitle}.`);
-
-    this.h4("Document contents");
-    const contents = DOC_TAB_META.map((t, i) => [`${i + 1}.0`, t.title]);
-    this.table([["Section", "Title"]], contents, { fontSize: 9.5 });
-
-    this.h4("Revision history");
-    this.table(
-      [["Version", "Date", "Author", "Description"]],
-      [[`v${this.meta.version}`, new Date().toLocaleDateString("en-GB"), "PM Studio", "Architecture suite generation"]],
-      { fontSize: 9 },
-    );
-
-    this.tocPage = this.getCurrentPage() + 1;
-    this.newPage();
-    this.pageHeading("Table of contents", false);
-    this.y += 4;
+    if (this.meta.mode === "section") return;
+    /* Full report uses cover + inline contents — no extra control pages. */
   }
 
   fillTableOfContents(): void {
@@ -318,11 +300,12 @@ class PdfWriter {
   }
 
   overviewBlock(text: string): void {
-    if (!text.trim()) return;
+    const body = conciseText(text, 380);
+    if (!body) return;
     this.ensureSpace(20);
     this.doc.setFillColor(248, 250, 252);
     this.doc.setDrawColor(226, 232, 240);
-    const lines = this.lines(text, 10.5);
+    const lines = this.lines(body, 10.5);
     const boxH = lines.length * 5.2 + 10;
     this.doc.roundedRect(MARGIN.left, this.y, CONTENT_W, boxH, 2, 2, "FD");
     this.doc.setFont("helvetica", "bold");
@@ -432,59 +415,61 @@ class PdfWriter {
     this.y = (this.doc.lastAutoTable?.finalY ?? this.y) + 6;
   }
 
-  keyValueTable(data: Record<string, unknown>): void {
-    const rows = Object.entries(data)
-      .filter(([, v]) => v !== undefined && v !== null)
-      .map(([k, v]) => [humanize(k), typeof v === "object" ? JSON.stringify(v) : String(v)]);
-    if (rows.length === 0) {
-      this.writeJustified("No conventions specified.", 10, 5);
-      return;
-    }
-    this.table([["Field", "Value"]], rows);
-  }
-
   beginFigures(): void {
     if (this.figureCounter > 0) return;
-    this.ensureSpace(10);
-    this.h4(`${this.currentSection}.x  Architecture diagrams`);
-    this.writeJustified(
-      "The following figures illustrate key structural and behavioural aspects of this section. Each diagram is rendered from the authoritative Mermaid source produced during architecture generation.",
-      10,
-      5,
-    );
+    this.h4("Diagrams");
   }
 
-  figurePage(
+  /** Every architecture diagram renders on its own landscape A4 page. */
+  private figurePage(
     name: string,
     dataUrl: string,
     widthPx: number,
     heightPx: number,
-    aspectRatio: number,
+    explanation: string,
   ): void {
     this.figureCounter += 1;
-    const figureId = `Figure ${this.currentSection}-${this.figureCounter}`;
+    const figureId = `Fig ${this.currentSection}-${this.figureCounter}`;
     const caption = humanize(name);
-    const useLandscape = aspectRatio >= WIDE_ASPECT_RATIO;
 
-    if (useLandscape) {
-      this.doc.addPage("a4", "landscape");
-    } else {
-      this.newPage();
-    }
+    this.doc.addPage("a4", "landscape");
 
-    const pageW = useLandscape ? PAGE_H : PAGE_W;
-    const pageH = useLandscape ? PAGE_W : PAGE_H;
+    const pageW = PAGE_H;
+    const pageH = PAGE_W;
     const contentW = pageW - MARGIN.left - MARGIN.right;
-    const contentH = pageH - MARGIN.top - MARGIN.bottom - 24;
+    let contentTop = MARGIN.top + 10;
 
     this.doc.setFont("helvetica", "bold");
     this.doc.setFontSize(11);
     this.doc.setTextColor(...HEADER_COLOR);
-    this.doc.text(figureId, MARGIN.left, MARGIN.top);
-    this.doc.setFont("helvetica", "normal");
-    this.doc.setFontSize(10);
-    this.doc.setTextColor(71, 85, 105);
-    this.doc.text(caption, MARGIN.left, MARGIN.top + 6);
+    this.doc.text(`${figureId}: ${caption}`, MARGIN.left, contentTop);
+    contentTop += 7;
+
+    if (explanation.trim()) {
+      this.doc.setFont("helvetica", "normal");
+      this.doc.setFontSize(8.5);
+      this.doc.setTextColor(51, 65, 85);
+      const explLines = this.lines(explanation.trim(), 8.5, contentW);
+      const explLineH = 3.8;
+      const maxExplLines = 10;
+      const shown = explLines.slice(0, maxExplLines);
+      this.doc.text(shown, MARGIN.left, contentTop);
+      contentTop += shown.length * explLineH + 4;
+      if (explLines.length > maxExplLines) {
+        this.doc.setFont("helvetica", "italic");
+        this.doc.setFontSize(8);
+        this.doc.setTextColor(100, 116, 139);
+        this.doc.text(
+          `…and ${explLines.length - maxExplLines} more line(s); see PM Studio for the full walkthrough.`,
+          MARGIN.left,
+          contentTop,
+        );
+        contentTop += 5;
+      }
+    }
+
+    const footerReserve = 10;
+    const contentH = pageH - contentTop - MARGIN.bottom - footerReserve;
 
     let imgWmm = widthPx * PX_TO_MM;
     let imgHmm = heightPx * PX_TO_MM;
@@ -493,7 +478,7 @@ class PdfWriter {
     imgHmm *= scale;
 
     const x = MARGIN.left + (contentW - imgWmm) / 2;
-    const y = MARGIN.top + 14 + (contentH - imgHmm) / 2;
+    const y = contentTop + Math.max(0, (contentH - imgHmm) / 2);
 
     this.doc.setDrawColor(203, 213, 225);
     this.doc.setLineWidth(0.4);
@@ -501,73 +486,127 @@ class PdfWriter {
     this.doc.roundedRect(x - 2, y - 2, imgWmm + 4, imgHmm + 4, 2, 2, "FD");
     this.doc.addImage(dataUrl, "PNG", x, y, imgWmm, imgHmm, undefined, "SLOW");
 
-    const captionY = y + imgHmm + 8;
     this.doc.setFont("helvetica", "italic");
-    this.doc.setFontSize(9.5);
-    this.doc.setTextColor(71, 85, 105);
-    this.doc.text(`${figureId}: ${caption}`, pageW / 2, captionY, { align: "center", maxWidth: contentW });
+    this.doc.setFontSize(9);
+    this.doc.setTextColor(100, 116, 139);
+    this.doc.text(
+      `${figureId}: ${caption}`,
+      pageW / 2,
+      pageH - MARGIN.bottom + 4,
+      { align: "center", maxWidth: contentW },
+    );
     this.doc.setTextColor(0, 0, 0);
 
-    if (useLandscape) {
-      this.doc.addPage("a4", "portrait");
-    }
+    this.doc.addPage("a4", "portrait");
     this.y = MARGIN.top;
   }
 
-  diagramFallback(name: string, source: string): void {
-    this.figureCounter += 1;
-    this.newPage();
-    this.h4(`Figure ${this.currentSection}-${this.figureCounter}: ${humanize(name)}`);
-    this.writeJustified("Diagram could not be rendered. Source definition is provided below for reference.", 10, 5);
-    const lines = this.lines(source.trim(), 8, CONTENT_W - 8);
-    this.doc.setFillColor(248, 250, 252);
-    const boxH = Math.min(lines.length * 4 + 8, 120);
-    this.doc.roundedRect(MARGIN.left, this.y, CONTENT_W, boxH, 2, 2, "F");
-    this.doc.setFont("courier", "normal");
-    this.doc.setFontSize(8);
-    let ly = this.y + 5;
-    for (const line of lines.slice(0, 28)) {
-      this.doc.text(line, MARGIN.left + 3, ly);
-      ly += 4;
+  /** Portrait narrative page placed immediately after each diagram figure. */
+  private writeFigureStoryPage(name: string, story: string): void {
+    const figureId = `Fig ${this.currentSection}-${this.figureCounter}`;
+    const caption = humanize(name);
+
+    this.pageHeading(`${figureId} — narrative`, false);
+    this.doc.setFont("helvetica", "italic");
+    this.doc.setFontSize(10);
+    this.doc.setTextColor(71, 85, 105);
+    this.doc.text(
+      `How ${caption.toLowerCase()} is used, why it matters, and which dependencies it relies on`,
+      MARGIN.left,
+      this.y,
+    );
+    this.y += 8;
+    this.doc.setTextColor(0, 0, 0);
+
+    this.writeJustified(story, 10.5, 5.4);
+  }
+
+  figureWithStory(
+    name: string,
+    dataUrl: string,
+    widthPx: number,
+    heightPx: number,
+    explanation: string,
+    story: string,
+  ): void {
+    this.figurePage(name, dataUrl, widthPx, heightPx, explanation);
+    if (story.trim()) {
+      this.writeFigureStoryPage(name, story);
     }
-    this.y += boxH + 6;
+  }
+
+  diagramFallbackWithStory(name: string, explanation = "", story = ""): void {
+    this.diagramFallback(name, explanation);
+    if (story.trim()) {
+      this.writeFigureStoryPage(name, story);
+    }
+  }
+
+  private diagramFallback(name: string, explanation = ""): void {
+    this.figureCounter += 1;
+    this.doc.addPage("a4", "landscape");
+    const pageW = PAGE_H;
+
+    this.doc.setFont("helvetica", "bold");
+    this.doc.setFontSize(12);
+    this.doc.setTextColor(...HEADER_COLOR);
+    this.doc.text(
+      `Fig ${this.currentSection}-${this.figureCounter}: ${humanize(name)}`,
+      MARGIN.left,
+      MARGIN.top,
+    );
     this.doc.setFont("helvetica", "normal");
+    this.doc.setFontSize(9);
+    this.doc.setTextColor(51, 65, 85);
+    if (explanation.trim()) {
+      const lines = this.lines(explanation.trim(), 9, pageW - MARGIN.left - MARGIN.right);
+      this.doc.text(lines.slice(0, 12), MARGIN.left, MARGIN.top + 10);
+    }
+    this.doc.setFontSize(10);
+    this.doc.setTextColor(100, 116, 139);
+    this.doc.text(
+      "Diagram image could not be embedded. View this section in PM Studio for the interactive diagram.",
+      MARGIN.left,
+      MARGIN.top + 52,
+      { maxWidth: pageW - MARGIN.left - MARGIN.right },
+    );
+    this.doc.setTextColor(0, 0, 0);
+    this.doc.addPage("a4", "portrait");
+    this.y = MARGIN.top;
   }
 
   signatoryPage(): void {
     this.newPage();
-    this.pageHeading("Document approval and sign-off", true);
+    this.pageHeading("Approval sign-off", true);
     this.writeJustified(
-      "By signing below, the parties confirm that this architecture document has been reviewed and is approved for use as the technical baseline for implementation.",
+      "Signatures confirm review and approval of this architecture document for implementation.",
       10.5,
       5.2,
     );
-    this.y += 6;
+    this.y += 8;
 
-    const colW = CONTENT_W / 3;
-    const roles = ["Prepared by", "Reviewed by", "Approved by"];
-    const startY = this.y + 8;
-    roles.forEach((role, i) => {
-      const x = MARGIN.left + i * colW;
-      this.doc.setFillColor(248, 250, 252);
-      this.doc.roundedRect(x, startY, colW - 4, 48, 2, 2, "F");
-      this.doc.setFont("helvetica", "bold");
-      this.doc.setFontSize(10);
-      this.doc.setTextColor(...HEADER_COLOR);
-      this.doc.text(role, x + 4, startY + 8);
-      this.doc.setFont("helvetica", "normal");
-      this.doc.setFontSize(8.5);
-      this.doc.setTextColor(100, 116, 139);
-      let ly = startY + 18;
-      for (const label of ["Name", "Signature", "Date"]) {
-        this.doc.text(label, x + 4, ly);
-        this.doc.setDrawColor(148, 163, 184);
-        this.doc.line(x + 4, ly + 5, x + colW - 8, ly + 5);
-        ly += 12;
-      }
-      this.doc.setTextColor(0, 0, 0);
+    const headers = ["Role", "Name", "Signature", "Date"];
+    const rows = [
+      ["Prepared by", "", "", ""],
+      ["Reviewed by", "", "", ""],
+      ["Approved by", "", "", ""],
+    ];
+    autoTable(this.doc, {
+      startY: this.y,
+      margin: { left: MARGIN.left, right: MARGIN.right },
+      head: [headers],
+      body: rows,
+      styles: { fontSize: 10, cellPadding: 8, minCellHeight: 14 },
+      headStyles: { fillColor: HEADER_COLOR, textColor: 255, fontStyle: "bold" },
+      columnStyles: {
+        0: { cellWidth: 38, fontStyle: "bold" },
+        1: { cellWidth: 42 },
+        2: { cellWidth: 48 },
+        3: { cellWidth: 32 },
+      },
+      theme: "grid",
     });
-    this.y = startY + 58;
+    this.y = (this.doc.lastAutoTable?.finalY ?? this.y) + 8;
   }
 
   applyHeadersFooters(): void {
@@ -620,85 +659,97 @@ function renderDiagrams(
   for (const [name, source] of entries) {
     const mapKey = `${docKey}:${name}`;
     const img = diagramImages[mapKey];
+    const explanation = buildDiagramExplanation(name, source, doc);
+    const story = buildDiagramStory(name, source, doc);
     if (img) {
-      w.figurePage(name, img.dataUrl, img.widthPx, img.heightPx, img.aspectRatio);
+      w.figureWithStory(name, img.dataUrl, img.widthPx, img.heightPx, explanation, story);
     } else {
-      w.diagramFallback(name, source);
+      w.diagramFallbackWithStory(name, explanation, story);
     }
   }
 }
 
 function renderSystemArch(w: PdfWriter, doc: Record<string, unknown>): void {
   w.overviewBlock(String(doc.overview ?? ""));
-  w.labeledValue("Architecture pattern", String(doc.architecture_pattern ?? ""));
-  w.subsection("Technology stack", "The following table lists technologies selected for each architectural layer, including version and rationale.");
+  w.labeledValue("Pattern", String(doc.architecture_pattern ?? ""));
   const stack = normalizeTechStack(doc.tech_stack);
-  w.table(
-    [["Layer", "Technology", "Version", "Rationale"]],
-    stack.map((r) => [humanize(r.layer), r.name, r.version, r.reason]),
-  );
-  w.subsection("System components", "Deployable components and their responsibilities within the overall system.");
-  const components = (doc.components as Array<Record<string, unknown>>) ?? [];
-  w.table(
-    [["Component", "Type", "Port", "Responsibility"]],
-    components.map((c) => [
-      String(c.name),
-      String(c.type),
-      c.port ? String(c.port) : "—",
-      String(c.responsibility ?? ""),
-    ]),
-  );
-  w.subsection("Data flow", "End-to-end sequence describing how data moves through the system.");
-  w.numberedList((doc.data_flow as string[]) ?? []);
+  if (stack.length > 0) {
+    w.h4("Technology stack");
+    w.table(
+      [["Layer", "Technology", "Version"]],
+      stack.map((r) => [humanize(r.layer), r.name, r.version || "—"]),
+      { fontSize: 9 },
+    );
+  }
+  const components = trimList((doc.components as Array<Record<string, unknown>>) ?? [], 10);
+  if (components.length > 0) {
+    w.h4("Components");
+    w.table(
+      [["Component", "Type", "Responsibility"]],
+      components.map((c) => [
+        String(c.name),
+        String(c.type ?? "—"),
+        conciseText(String(c.responsibility ?? ""), 120),
+      ]),
+      { fontSize: 9 },
+    );
+  }
+  const flow = trimList((doc.data_flow as string[]) ?? [], 8);
+  if (flow.length > 0) {
+    w.h4("Data flow");
+    w.numberedList(flow.map((s) => conciseText(s, 140)));
+  }
 }
 
 function renderDatabase(w: PdfWriter, doc: Record<string, unknown>): void {
   w.overviewBlock(String(doc.overview ?? ""));
-  w.labeledValue("Database engine", String(doc.database ?? ""));
-  w.subsection("Naming and schema conventions");
-  w.keyValueTable((doc.conventions as Record<string, unknown>) ?? {});
-  const tables = (doc.tables as Array<Record<string, unknown>>) ?? [];
-  w.subsection("Entity tables", `${tables.length} table(s) derived from SRS entities.`);
+  w.labeledValue("Engine", String(doc.database ?? ""));
+  const conventions = (doc.conventions as Record<string, unknown>) ?? {};
+  const convRows = Object.entries(conventions)
+    .filter(([, v]) => v)
+    .slice(0, 8)
+    .map(([k, v]) => [humanize(k), String(v)]);
+  if (convRows.length > 0) {
+    w.h4("Conventions");
+    w.table([["Rule", "Value"]], convRows, { fontSize: 9 });
+  }
+  const tables = trimList((doc.tables as Array<Record<string, unknown>>) ?? [], 8);
   for (const tbl of tables) {
-    w.h4(`Table: ${String(tbl.name)}`);
-    w.labeledValue("Purpose", String(tbl.purpose ?? ""));
-    w.labeledValue("Linked SRS entity", String(tbl.linked_srs_entity ?? ""));
-    const cols = (tbl.columns as Array<Record<string, unknown>>) ?? [];
-    w.table(
-      [["Column", "Type", "Primary key", "Nullable", "Default"]],
-      cols.map((col) => [
-        String(col.name),
-        String(col.type),
-        col.pk ? "Yes" : "No",
-        col.nullable ? "Yes" : "No",
-        String(col.default ?? "—"),
-      ]),
-    );
+    w.h4(String(tbl.name));
+    const purpose = String(tbl.purpose ?? "");
+    if (purpose) w.labeledValue("Purpose", conciseText(purpose, 100));
+    const cols = trimList((tbl.columns as Array<Record<string, unknown>>) ?? [], 14);
+    if (cols.length > 0) {
+      w.table(
+        [["Column", "Type", "PK", "Null"]],
+        cols.map((col) => [
+          String(col.name),
+          String(col.type),
+          col.pk ? "Y" : "",
+          col.nullable === false ? "N" : "Y",
+        ]),
+        { fontSize: 8.5 },
+      );
+    }
   }
 }
 
 function renderApi(w: PdfWriter, doc: Record<string, unknown>): void {
   w.overviewBlock(String(doc.overview ?? ""));
   w.labeledValue("Base URL", String(doc.base_url ?? ""));
-  w.labeledValue("Authentication", String(doc.auth ?? ""));
-  const endpoints = (doc.endpoints as Array<Record<string, unknown>>) ?? [];
-  const byModule = endpoints.reduce<Record<string, Array<Record<string, unknown>>>>((acc, ep) => {
-    const mod = String(ep.module ?? "General");
-    (acc[mod] ??= []).push(ep);
-    return acc;
-  }, {});
-  w.subsection("API endpoints", `${endpoints.length} endpoint(s) organised by functional module.`);
-  for (const [mod, eps] of Object.entries(byModule)) {
-    w.h4(`Module: ${mod}`);
+  w.labeledValue("Auth", conciseText(String(doc.auth ?? ""), 160));
+  const endpoints = trimList((doc.endpoints as Array<Record<string, unknown>>) ?? [], 24);
+  if (endpoints.length > 0) {
+    w.h4("Endpoints");
     w.table(
-      [["Method", "Path", "Description", "Requirement"]],
-      eps.map((ep) => [
+      [["Method", "Path", "Description", "FR"]],
+      endpoints.map((ep) => [
         String(ep.method),
         String(ep.full_path ?? ep.path),
-        String(ep.description ?? ""),
+        conciseText(String(ep.description ?? ""), 90),
         String(ep.linked_fr ?? "—"),
       ]),
-      { fontSize: 8.5, methodColumn: true },
+      { fontSize: 8, methodColumn: true },
     );
   }
 }
@@ -706,15 +757,20 @@ function renderApi(w: PdfWriter, doc: Record<string, unknown>): void {
 function renderFrontend(w: PdfWriter, doc: Record<string, unknown>): void {
   w.overviewBlock(String(doc.overview ?? ""));
   w.labeledValue("Framework", String(doc.framework ?? ""));
-  w.labeledValue("Styling approach", String(doc.styling ?? ""));
-  w.subsection("Application pages", "Routes, purpose, and source file mapping.");
-  const pages = (doc.pages as Array<Record<string, unknown>>) ?? [];
-  w.table(
-    [["Route", "Description", "Source file"]],
-    pages.map((p) => [String(p.path), String(p.description ?? ""), String(p.file ?? "")]),
-  );
-  w.subsection("Folder structure", "Recommended project directory layout.");
-  w.bulletList(flattenFolder(doc.folder_structure ?? {}));
+  w.labeledValue("Styling", String(doc.styling ?? ""));
+  const pages = trimList((doc.pages as Array<Record<string, unknown>>) ?? [], 16);
+  if (pages.length > 0) {
+    w.h4("Pages");
+    w.table(
+      [["Route", "Purpose", "File"]],
+      pages.map((p) => [
+        String(p.path),
+        conciseText(String(p.description ?? ""), 80),
+        String(p.file ?? ""),
+      ]),
+      { fontSize: 8.5 },
+    );
+  }
 }
 
 function renderSecurity(w: PdfWriter, doc: Record<string, unknown>): void {
@@ -723,19 +779,27 @@ function renderSecurity(w: PdfWriter, doc: Record<string, unknown>): void {
     | Array<Record<string, string>>
     | undefined;
   if (matrix && matrix.length > 0) {
-    w.subsection("Role-based access control", "Permission matrix by resource and role.");
+    w.h4("RBAC matrix");
     w.table(
-      [["Resource", "Studio owner", "Developer", "Client"]],
-      matrix.map((row) => [row.resource, row.studio_owner, row.developer, row.client]),
+      [["Resource", "Owner", "Developer", "Client"]],
+      trimList(matrix, 12).map((row) => [
+        row.resource,
+        row.studio_owner,
+        row.developer,
+        row.client,
+      ]),
+      { fontSize: 8.5 },
     );
   }
-  w.subsection("OWASP security checklist", "Mapped mitigations for common web application risks.");
-  const owasp = (doc.owasp_checklist as Array<Record<string, string>>) ?? [];
-  w.table(
-    [["ID", "Risk", "Status", "Mitigation"]],
-    owasp.map((item) => [item.id, item.name, item.status, item.how]),
-    { fontSize: 8.5 },
-  );
+  const owasp = trimList((doc.owasp_checklist as Array<Record<string, string>>) ?? [], 10);
+  if (owasp.length > 0) {
+    w.h4("OWASP checklist");
+    w.table(
+      [["ID", "Risk", "Mitigation"]],
+      owasp.map((item) => [item.id, item.name, conciseText(item.how ?? "", 100)]),
+      { fontSize: 8 },
+    );
+  }
 }
 
 function renderUiux(w: PdfWriter, doc: Record<string, unknown>): void {
@@ -743,15 +807,21 @@ function renderUiux(w: PdfWriter, doc: Record<string, unknown>): void {
   const palette = (doc.design_system as Record<string, unknown>)?.color_palette as
     | Record<string, string>
     | undefined;
-  if (palette) {
-    w.subsection("Design system — color palette");
+  if (palette && Object.keys(palette).length > 0) {
+    w.h4("Color palette");
     w.table(
-      [["Design token", "Value"]],
-      Object.entries(palette).map(([name, value]) => [humanize(name), value]),
+      [["Token", "Value"]],
+      Object.entries(palette)
+        .slice(0, 10)
+        .map(([name, value]) => [humanize(name), value]),
+      { fontSize: 9 },
     );
   }
-  w.subsection("UX rules", "Mandatory interaction and presentation guidelines.");
-  w.bulletList((doc.ux_rules as string[]) ?? []);
+  const rules = trimList((doc.ux_rules as string[]) ?? [], 10);
+  if (rules.length > 0) {
+    w.h4("UX rules");
+    w.bulletList(rules.map((r) => conciseText(r, 120)));
+  }
 }
 
 const CONTENT_RENDERERS: Record<ArchDocKey, (w: PdfWriter, doc: Record<string, unknown>) => void> = {
@@ -782,7 +852,7 @@ export function buildArchitecturePdf(options: {
 
   const docTitle =
     mode === "full"
-      ? "Technical architecture document"
+      ? "Full architecture report"
       : sectionTitle ?? "Architecture section";
 
   const w = new PdfWriter({
@@ -795,10 +865,19 @@ export function buildArchitecturePdf(options: {
   });
 
   w.coverPage();
-  w.documentControlPage();
 
-  sections.forEach((tab, index) => {
-    const doc = arch[tab.key] as Record<string, unknown> | null | undefined;
+  const includedSections = sections
+    .map((tab) => ({
+      tab,
+      doc: arch[tab.key] as Record<string, unknown> | null | undefined,
+    }))
+    .filter((s) => s.doc);
+
+  if (mode === "full") {
+    w.tableOfContentsPage(includedSections.map((s) => s.tab.title));
+  }
+
+  includedSections.forEach(({ tab, doc }, index) => {
     if (!doc) return;
     const sectionNum = index + 1;
     w.beginSection(sectionNum, tab.title);

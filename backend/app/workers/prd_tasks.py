@@ -9,14 +9,21 @@ from app.core.database import SyncSessionLocal
 from app.models.prd import PRD, PRDStatus
 from app.models.project import Project
 from app.models.requirement import Requirement
+from app.services.ai.model_override import clear_model_override, set_model_override
+from app.services.ai.prd_service import enrich_prd_content
 from app.services.prd.service import generate_prd_ai
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="prd.generate")
-def generate_prd_task(prd_id: str) -> dict[str, str]:
+def generate_prd_task(
+    prd_id: str,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, str]:
     """Background task to generate PRD using Claude AI."""
+    set_model_override(model_provider, model_id)
     db = SyncSessionLocal()
     prd: PRD | None = None
     try:
@@ -47,7 +54,7 @@ def generate_prd_task(prd_id: str) -> dict[str, str]:
         finally:
             loop.close()
 
-        prd.content_json = prd_data.model_dump()
+        prd.content_json = enrich_prd_content(prd_data.model_dump())
         prd.status = PRDStatus.draft
         db.commit()
 
@@ -61,3 +68,4 @@ def generate_prd_task(prd_id: str) -> dict[str, str]:
         return {"error": str(exc)[:500]}
     finally:
         db.close()
+        clear_model_override()

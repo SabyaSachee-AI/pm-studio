@@ -1,4 +1,4 @@
-"""AI routing: free mode chains, paid defaults, and per-screen overrides."""
+"""AI routing: free / low_cost / premium tiers, multi-provider chains, screen overrides."""
 
 from __future__ import annotations
 
@@ -7,9 +7,14 @@ import logging
 from typing import Any, Type, TypeVar
 from uuid import UUID
 
+import httpx
 import instructor
-from anthropic import APIStatusError, AsyncAnthropic, RateLimitError as AnthropicRateLimitError
-from openai import AsyncOpenAI, RateLimitError as OpenAIRateLimitError
+from anthropic import AsyncAnthropic, RateLimitError as AnthropicRateLimitError
+from openai import (
+    APIStatusError,
+    AsyncOpenAI,
+    RateLimitError as OpenAIRateLimitError,
+)
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,19 +25,142 @@ from app.models.organization import Organization
 from app.services.ai.providers import (
     DEFAULT_PAID_ROUTING,
     FREE_MODE_QUALITY_BOOSTS,
+    LOW_COST_ROUTING,
     FREE_ROUTING,
     SCREEN_DEFAULT_TASK,
     model_display_name,
+    routing_for_tier,
 )
+from app.services.ai.model_override import get_model_override
+from app.services.ai.usage_tracker import increment_usage
 
 T = TypeVar("T", bound=BaseModel)
 logger = logging.getLogger(__name__)
 
-_RATE_LIMIT_ERRORS = (AnthropicRateLimitError, OpenAIRateLimitError)
+_RATE_LIMIT_ERRORS = (AnthropicRateLimitError, OpenAIRateLimitError, APIStatusError)
+
+_ARCH_TASK_TIMEOUT_SEC = 720
+_DEFAULT_TASK_TIMEOUT_SEC = 300
+_HTTP_TIMEOUT = httpx.Timeout(connect=30.0, read=600.0, write=60.0, pool=30.0)
+
+_ARCH_MAX_RETRIES = 2
+_DEFAULT_MAX_RETRIES = 3
+
+_COOLDOWN_DAILY_QUOTA_SEC = 3600
+_COOLDOWN_RATE_LIMIT_SEC = 120
+
+_PROVIDER_BASE_URLS: dict[str, str | None] = {
+    "openai": None,
+    "openrouter": "https://openrouter.ai/api/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "together": "https://api.together.xyz/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "cerebras": "https://api.cerebras.ai/v1",
+    "deepseek": "https://api.deepseek.com",
+}
+
+_OPENAI_COMPAT_INSTRUCTOR_MODES: dict[str, instructor.Mode] = {
+    "openai": instructor.Mode.JSON,
+    "openrouter": instructor.Mode.JSON,
+    "groq": instructor.Mode.TOOLS,
+    "together": instructor.Mode.JSON,
+    "gemini": instructor.Mode.JSON,
+    "cerebras": instructor.Mode.JSON,
+    "deepseek": instructor.Mode.JSON,
+}
+
+_PROVIDER_OUTPUT_CAPS: dict[str, int] = {
+    "groq": 8192,
+    "cerebras": 8192,
+    "deepseek": 8192,
+}
+
+
+def _effective_max_tokens(provider: str, requested: int, task_type: str) -> int:
+    """Clamp max_tokens per provider limits (Groq 8192, Gemini higher for arch)."""
+    cap = _PROVIDER_OUTPUT_CAPS.get(provider, requested)
+    if provider == "gemini" and task_type.startswith("arch_"):
+        cap = max(cap, 24000)
+    return min(requested, cap)
+
+
+def _resolve_effective_tier(org: Organization) -> str:
+    """Return active cost tier; sync legacy free_mode_enabled flag."""
+    tier = getattr(org, "ai_tier", None) or "premium"
+    if tier not in ("free", "low_cost", "premium"):
+        tier = "free" if org.free_mode_enabled else "premium"
+    if org.free_mode_enabled and tier == "premium":
+        tier = "free"
+    return tier
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    if isinstance(exc, _RATE_LIMIT_ERRORS):
+        if isinstance(exc, APIStatusError) and exc.status_code not in (429, 503):
+            return False
+        return True
+    msg = str(exc).lower()
+    return "rate limit" in msg or "429" in msg or "quota" in msg or "503" in msg
+
+
+def _is_daily_quota_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return (
+        "quota" in msg
+        or "resource_exhausted" in msg
+        or "exceeded your current quota" in msg
+        or "daily" in msg
+    )
+
+
+async def _is_cooling(provider: str, model: str) -> bool:
+    try:
+        import redis.asyncio as redis  # type: ignore[import]
+
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        r = redis.from_url(settings.redis_url, decode_responses=True)
+        async with r:
+            if await r.exists(f"ai_cooldown:{provider}"):
+                return True
+            return bool(await r.exists(f"ai_cooldown:{provider}:{model}"))
+    except Exception:
+        return False
+
+
+async def _set_cooling(
+    provider: str,
+    model: str,
+    seconds: int,
+    scope: str,
+) -> None:
+    try:
+        import redis.asyncio as redis  # type: ignore[import]
+
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        key = (
+            f"ai_cooldown:{provider}"
+            if scope == "provider"
+            else f"ai_cooldown:{provider}:{model}"
+        )
+        r = redis.from_url(settings.redis_url, decode_responses=True)
+        async with r:
+            await r.setex(key, seconds, "1")
+    except Exception as exc:
+        logger.debug("Cooldown set failed (non-fatal): %s", exc)
+
+
+def _task_timeout_sec(task_type: str) -> float:
+    if task_type.startswith("arch_"):
+        return float(_ARCH_TASK_TIMEOUT_SEC)
+    return float(_DEFAULT_TASK_TIMEOUT_SEC)
 
 
 class AiRouter:
-    """Route AI calls through free chains, paid defaults, or screen overrides."""
+    """Route AI calls through tier chains, paid defaults, or screen overrides."""
 
     async def call(
         self,
@@ -48,8 +176,10 @@ class AiRouter:
         db: AsyncSession | None = None,
     ) -> T:
         org = await self._resolve_org(org_id, db)
+        tier = _resolve_effective_tier(org)
 
-        override = screen_override
+        request_override = get_model_override()
+        override = screen_override or request_override
         if override is None and screen and org.screen_model_overrides:
             raw = org.screen_model_overrides.get(screen)
             if raw and isinstance(raw, dict):
@@ -70,17 +200,20 @@ class AiRouter:
                 max_tokens,
                 task_type,
                 org,
-                free_mode=org.free_mode_enabled,
+                tier=tier,
             )
 
-        if org.free_mode_enabled:
-            routing = FREE_ROUTING.get(task_type)
+        if tier in ("free", "low_cost"):
+            routing_table = routing_for_tier(tier)
+            routing = routing_table.get(task_type)
             if not routing:
-                raise ValueError(f"No free routing defined for task: {task_type}")
+                raise ValueError(f"No {tier} routing defined for task: {task_type}")
             enhanced_prompt = prompt
             if task_type in FREE_MODE_QUALITY_BOOSTS:
-                enhanced_prompt = f"{FREE_MODE_QUALITY_BOOSTS[task_type].strip()}\n\n{prompt}"
-            return await self._try_free_chain(
+                enhanced_prompt = (
+                    f"{FREE_MODE_QUALITY_BOOSTS[task_type].strip()}\n\n{prompt}"
+                )
+            return await self._try_chain(
                 routing,
                 enhanced_prompt,
                 response_model,
@@ -89,6 +222,7 @@ class AiRouter:
                 max_tokens,
                 task_type,
                 org,
+                tier=tier,
             )
 
         provider, model = DEFAULT_PAID_ROUTING.get(
@@ -104,7 +238,7 @@ class AiRouter:
             max_tokens,
             task_type,
             org,
-            free_mode=False,
+            tier="premium",
         )
 
     async def _resolve_org(
@@ -139,13 +273,17 @@ class AiRouter:
         provider_cfg = configs.get(provider) or {}
         if provider_cfg.get("api_key"):
             return provider_cfg["api_key"]
-        if provider == "anthropic" and settings.anthropic_api_key:
-            return settings.anthropic_api_key
-        if provider == "openai" and settings.openai_api_key:
-            return settings.openai_api_key
-        if provider == "openrouter" and settings.openrouter_api_key:
-            return settings.openrouter_api_key
-        return None
+        env_map = {
+            "anthropic": settings.anthropic_api_key,
+            "openai": settings.openai_api_key,
+            "openrouter": settings.openrouter_api_key,
+            "groq": settings.groq_api_key,
+            "together": settings.together_api_key,
+            "gemini": settings.gemini_api_key,
+            "cerebras": settings.cerebras_api_key,
+            "deepseek": settings.deepseek_api_key,
+        }
+        return env_map.get(provider)
 
     def _provider_enabled(self, provider: str, org: Organization) -> bool:
         configs = org.ai_provider_configs or {}
@@ -154,7 +292,7 @@ class AiRouter:
             return False
         return self._get_api_key(provider, org) is not None
 
-    async def _try_free_chain(
+    async def _try_chain(
         self,
         routing: dict[str, Any],
         prompt: str,
@@ -164,54 +302,119 @@ class AiRouter:
         max_tokens: int,
         task_type: str,
         org: Organization,
+        tier: str,
     ) -> T:
-        if not self._provider_enabled("openrouter", org):
-            raise RuntimeError(
-                "OpenRouter not configured. Add OpenRouter API key to use free mode."
-            )
+        models_in_chain: list[tuple[str, str]] = []
+        for attempt_num in range(1, 16):
+            entry = routing.get(f"model_{attempt_num}")
+            if entry:
+                models_in_chain.append(entry)
+
+        if not models_in_chain:
+            raise RuntimeError(f"Empty model chain for {task_type}, tier={tier}")
 
         last_error: str | None = None
-        for attempt_num in range(1, 5):
-            entry = routing.get(f"model_{attempt_num}")
-            if not entry:
+        timeout_sec = _task_timeout_sec(task_type)
+
+        for attempt_num, (provider, model) in enumerate(models_in_chain, start=1):
+            if await _is_cooling(provider, model):
+                last_error = f"Cooling down: {provider}/{model}"
+                logger.info(
+                    "Skipping %s/%s — cooling down",
+                    provider,
+                    model,
+                    extra={"tier": tier, "attempt": attempt_num},
+                )
                 continue
-            _provider, model = entry
+
+            if not self._provider_enabled(provider, org):
+                logger.debug(
+                    "Skipping %s/%s — not configured",
+                    provider,
+                    model,
+                    extra={"tier": tier, "attempt": attempt_num},
+                )
+                continue
+
+            mode = _OPENAI_COMPAT_INSTRUCTOR_MODES.get(provider)
+            if provider != "anthropic" and mode is None:
+                logger.debug("Skipping %s — unsupported provider", provider)
+                continue
+
+            api_key = self._get_api_key(provider, org) or ""
+            effective_tokens = _effective_max_tokens(provider, max_tokens, task_type)
+
             try:
-                result = await self._call_provider(
-                    provider="openrouter",
+                call_coro = self._call_provider(
+                    provider=provider,
                     model=model,
-                    api_key=self._get_api_key("openrouter", org) or "",
+                    api_key=api_key,
                     prompt=prompt,
                     response_model=response_model,
                     system=system,
                     context=context,
-                    max_tokens=max_tokens,
+                    max_tokens=effective_tokens,
+                    task_type=task_type,
                 )
+                result = await asyncio.wait_for(call_coro, timeout=timeout_sec)
                 await self._log_usage(
                     task_type=task_type,
-                    provider="openrouter",
+                    provider=provider,
                     model=model,
                     org_id=org.id,
-                    free_mode=True,
+                    tier=tier,
                     attempt_number=attempt_num,
                 )
                 return result
-            except _RATE_LIMIT_ERRORS:
-                last_error = f"Rate limit: {model}"
-                await asyncio.sleep(5)
+            except asyncio.TimeoutError:
+                last_error = f"Timeout after {timeout_sec}s: {provider}/{model}"
+                logger.warning(last_error, extra={"tier": tier, "attempt": attempt_num})
                 continue
             except Exception as exc:
-                last_error = str(exc)[:200]
-                logger.exception(
-                    "Free model failed, trying next",
-                    extra={"model": model, "attempt": attempt_num},
+                is_rate_limit = _is_rate_limit_error(exc)
+                last_error = (
+                    f"Rate limit: {provider}/{model}"
+                    if is_rate_limit
+                    else str(exc)[:200]
                 )
+                if is_rate_limit:
+                    if _is_daily_quota_error(exc):
+                        await _set_cooling(
+                            provider,
+                            model,
+                            _COOLDOWN_DAILY_QUOTA_SEC,
+                            "provider",
+                        )
+                    else:
+                        await _set_cooling(
+                            provider,
+                            model,
+                            _COOLDOWN_RATE_LIMIT_SEC,
+                            "model",
+                        )
+                    logger.warning(
+                        "Rate limited on %s/%s — switching model",
+                        provider,
+                        model,
+                        extra={"tier": tier},
+                    )
+                    await asyncio.sleep(1)
+                else:
+                    logger.exception(
+                        "Model failed, trying next",
+                        extra={
+                            "provider": provider,
+                            "model": model,
+                            "tier": tier,
+                            "attempt": attempt_num,
+                        },
+                    )
                 continue
 
         raise RuntimeError(
-            f"All free models failed for {task_type}. "
+            f"All models failed for {task_type}, tier={tier}. "
             f"Last error: {last_error}. "
-            "Please try again or switch to paid providers."
+            "Try again later or switch tier."
         )
 
     async def _call_with_retry(
@@ -225,7 +428,7 @@ class AiRouter:
         max_tokens: int,
         task_type: str,
         org: Organization,
-        free_mode: bool,
+        tier: str,
     ) -> T:
         api_key = self._get_api_key(provider, org)
         if not api_key:
@@ -238,6 +441,7 @@ class AiRouter:
             else:
                 raise RuntimeError(f"{provider} API key not configured")
 
+        effective_tokens = _effective_max_tokens(provider, max_tokens, task_type)
         result = await self._call_provider(
             provider=provider,
             model=model,
@@ -246,14 +450,15 @@ class AiRouter:
             response_model=response_model,
             system=system,
             context=context,
-            max_tokens=max_tokens,
+            max_tokens=effective_tokens,
+            task_type=task_type,
         )
         await self._log_usage(
             task_type=task_type,
             provider=provider,
             model=model,
             org_id=org.id,
-            free_mode=free_mode,
+            tier=tier,
             attempt_number=1,
         )
         return result
@@ -268,46 +473,52 @@ class AiRouter:
         system: str,
         context: str,
         max_tokens: int,
+        task_type: str = "req_analyze",
     ) -> T:
         system_msg = system or "You are a professional software engineering assistant."
+        messages = _build_openai_messages(prompt, context, system_msg)
+
+        max_retries = (
+            _ARCH_MAX_RETRIES
+            if task_type.startswith("arch_")
+            else _DEFAULT_MAX_RETRIES
+        )
+
         if provider == "anthropic":
             client = instructor.from_anthropic(AsyncAnthropic(api_key=api_key))
             return await client.messages.create(
                 model=model,
                 max_tokens=max_tokens,
                 system=system_msg,
-                messages=_build_messages(prompt, context),
+                messages=_build_anthropic_messages(prompt, context),
                 response_model=response_model,
+                max_retries=max_retries,
             )
-        if provider in ("openai", "openrouter"):
-            base_url = (
-                "https://openrouter.ai/api/v1" if provider == "openrouter" else None
+
+        if provider in _OPENAI_COMPAT_INSTRUCTOR_MODES:
+            base_url = _PROVIDER_BASE_URLS.get(provider)
+            default_headers = None
+            if provider == "openrouter":
+                default_headers = {
+                    "HTTP-Referer": "https://pmstudio.app",
+                    "X-Title": "PM Studio",
+                }
+            raw_client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=_HTTP_TIMEOUT,
+                default_headers=default_headers,
             )
-            default_headers = (
-                {"HTTP-Referer": "https://pmstudio.app", "X-Title": "PM Studio"}
-                if provider == "openrouter"
-                else None
-            )
-            client = instructor.from_openai(
-                AsyncOpenAI(
-                    api_key=api_key,
-                    base_url=base_url,
-                    default_headers=default_headers,
-                )
-            )
-            messages: list[dict[str, str]] = []
-            if system:
-                messages.append({"role": "system", "content": system_msg})
-            if context:
-                messages.append({"role": "user", "content": f"Context:\n{context}"})
-                messages.append({"role": "assistant", "content": "Understood."})
-            messages.append({"role": "user", "content": prompt})
+            mode = _OPENAI_COMPAT_INSTRUCTOR_MODES[provider]
+            client = instructor.from_openai(raw_client, mode=mode)
             return await client.chat.completions.create(
                 model=model,
                 max_tokens=max_tokens,
                 messages=messages,
                 response_model=response_model,
+                max_retries=max_retries,
             )
+
         raise ValueError(f"Unsupported provider: {provider}")
 
     async def _log_usage(
@@ -316,7 +527,7 @@ class AiRouter:
         provider: str,
         model: str,
         org_id: UUID,
-        free_mode: bool,
+        tier: str,
         attempt_number: int,
     ) -> None:
         logger.info(
@@ -326,10 +537,11 @@ class AiRouter:
                 "provider": provider,
                 "model": model,
                 "org_id": str(org_id),
-                "free_mode": free_mode,
+                "tier": tier,
                 "attempt": attempt_number,
             },
         )
+        await increment_usage(str(org_id), provider)
 
     def resolve_screen_model(
         self,
@@ -340,25 +552,29 @@ class AiRouter:
         overrides = org.screen_model_overrides or {}
         raw = overrides.get(screen)
         if raw and isinstance(raw, dict) and raw.get("provider") and raw.get("model"):
-            provider = raw["provider"]
-            model = raw["model"]
             return {
-                "provider": provider,
-                "model": model,
-                "label": model_display_name(model),
+                "provider": raw["provider"],
+                "model": raw["model"],
+                "label": model_display_name(raw["model"]),
                 "source": "override",
             }
 
         task_type = SCREEN_DEFAULT_TASK.get(screen, "req_analyze")
-        if org.free_mode_enabled:
-            routing = FREE_ROUTING.get(task_type, {})
-            primary = routing.get("model_1", ("openrouter", "meta-llama/llama-4-maverick:free"))
+        tier = _resolve_effective_tier(org)
+
+        if tier in ("free", "low_cost"):
+            table = FREE_ROUTING if tier == "free" else LOW_COST_ROUTING
+            routing = table.get(task_type, {})
+            primary = routing.get(
+                "model_1",
+                ("openrouter", "openai/gpt-oss-120b:free"),
+            )
             provider, model = primary
             return {
                 "provider": provider,
                 "model": model,
                 "label": model_display_name(model),
-                "source": "free_mode",
+                "source": tier,
             }
 
         provider, model = DEFAULT_PAID_ROUTING.get(
@@ -368,12 +584,27 @@ class AiRouter:
             "provider": provider,
             "model": model,
             "label": model_display_name(model),
-            "source": "paid_default",
+            "source": "premium",
         }
 
 
-def _build_messages(prompt: str, context: str) -> list[dict[str, str]]:
+def _build_anthropic_messages(prompt: str, context: str) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
+    if context:
+        messages.append({"role": "user", "content": f"Context:\n{context}"})
+        messages.append({"role": "assistant", "content": "Understood."})
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+
+def _build_openai_messages(
+    prompt: str,
+    context: str,
+    system_msg: str,
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    if system_msg:
+        messages.append({"role": "system", "content": system_msg})
     if context:
         messages.append({"role": "user", "content": f"Context:\n{context}"})
         messages.append({"role": "assistant", "content": "Understood."})

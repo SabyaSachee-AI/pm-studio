@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import type { TaskStatus } from "@/lib/api";
 
 export type AiJobStatus = "idle" | "pending" | "processing" | "completed" | "failed";
 
@@ -73,6 +74,7 @@ export function useAiJob(options: UseAiJobOptions = {}) {
   const [tokenCount, setTokenCount] = useState<number | undefined>(undefined);
   const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
   const [messageRotateIndex, setMessageRotateIndex] = useState(0);
+  const [taskMeta, setTaskMeta] = useState<TaskStatus["meta"] | null>(null);
 
   const timerRef = useRef<number | null>(null);
   const pollRef = useRef<number | null>(null);
@@ -125,6 +127,7 @@ export function useAiJob(options: UseAiJobOptions = {}) {
       setOperationName("");
       setErrorMessage(undefined);
       setMessageRotateIndex(0);
+      setTaskMeta(null);
     }, 3000);
   }, []);
 
@@ -181,8 +184,14 @@ export function useAiJob(options: UseAiJobOptions = {}) {
         const tokens = extractTokenCount(data);
         if (tokens !== undefined) setTokenCount(tokens);
 
+        if (data.meta && typeof data.meta === "object") {
+          setTaskMeta(data.meta);
+        }
+
         if (mapped === "pending") setStatus("pending");
-        else if (mapped === "processing") setStatus("processing");
+        else if (mapped === "processing" || rawStatus.toUpperCase() === "PROGRESS") {
+          setStatus("processing");
+        }
         else if (mapped === "completed") completeJob(tokens);
         else if (mapped === "failed") failJob(String(data.error ?? "Job failed"));
 
@@ -205,6 +214,7 @@ export function useAiJob(options: UseAiJobOptions = {}) {
       setOperationName(opName);
       setTokenCount(undefined);
       setErrorMessage(undefined);
+      setTaskMeta(null);
       setStatus("pending");
       startElapsedTimer();
       startMessageRotation();
@@ -226,11 +236,43 @@ export function useAiJob(options: UseAiJobOptions = {}) {
     setTokenCount(undefined);
     setErrorMessage(undefined);
     setMessageRotateIndex(0);
+    setTaskMeta(null);
   }, [clearTimers]);
 
   const cancel = useCallback(() => {
     reset();
   }, [reset]);
+
+  const startManual = useCallback(
+    (opName: string) => {
+      clearTimers();
+      isManualRef.current = true;
+      taskIdRef.current = null;
+      setOperationName(opName);
+      setTokenCount(undefined);
+      setErrorMessage(undefined);
+      setStatus("processing");
+      startElapsedTimer();
+      startMessageRotation();
+    },
+    [clearTimers, startElapsedTimer, startMessageRotation],
+  );
+
+  const completeManual = useCallback(
+    (tokens?: number) => {
+      if (!isManualRef.current) return;
+      completeJob(tokens);
+    },
+    [completeJob],
+  );
+
+  const failManual = useCallback(
+    (error: string) => {
+      if (!isManualRef.current) return;
+      failJob(error);
+    },
+    [failJob],
+  );
 
   useEffect(() => () => clearTimers(), [clearTimers]);
 
@@ -244,9 +286,13 @@ export function useAiJob(options: UseAiJobOptions = {}) {
     tokenCount,
     errorMessage,
     processingMessage,
+    taskMeta,
     isRunning,
     isVisible: status !== "idle",
     startJob,
+    startManual,
+    completeManual,
+    failManual,
     reset,
     cancel,
   };

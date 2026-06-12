@@ -1,5 +1,7 @@
 const DEFAULT_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+const ACCESS_TOKEN_KEY = "access_token";
+const REFRESH_TOKEN_KEY = "refresh_token";
 
 export interface UserRegister {
   email: string;
@@ -30,6 +32,34 @@ export interface TaskStatus {
   status: string;
   result?: unknown;
   error?: string;
+  meta?: {
+    current_model?: string;
+    current_doc?: string;
+    phase?: string;
+    message?: string;
+    attempt?: number;
+    current_provider?: string;
+  };
+}
+
+export interface ModelChoice {
+  provider: string;
+  model: string;
+}
+
+export interface AiModelOption {
+  provider: string;
+  model: string;
+  label: string;
+  tier: string;
+  cost: string;
+  group: "premium" | "low_cost" | "free" | string;
+  available: boolean;
+}
+
+export interface AiModelCatalog {
+  default_tier: string;
+  models: AiModelOption[];
 }
 
 export interface Client {
@@ -80,6 +110,7 @@ export interface SRS {
   version: number;
   status: string;
   content_json: Record<string, unknown> | null;
+  source_prd_display_name?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -102,7 +133,6 @@ export interface Architecture {
   last_error?: string | null;
   resume_from?: string | null;
   suite_canon?: Record<string, unknown> | null;
-  consistency_report?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
   doc_system_arch?: Record<string, unknown> | null;
@@ -117,6 +147,12 @@ export interface Architecture {
   doc_frontend_status?: string | null;
   doc_security_status?: string | null;
   doc_uiux_status?: string | null;
+  consistency_report?: {
+    scores?: Record<string, number>;
+    overall?: number;
+    issues?: string[];
+    fr_coverage?: string;
+  } | null;
 }
 
 export interface ArchitectureListItem {
@@ -125,9 +161,12 @@ export interface ArchitectureListItem {
   srs_id: string;
   status: string;
   version: number;
-  display_name?: string | null;
+  display_name: string;
   created_at: string;
-  updated_at: string;
+  updated_at?: string;
+  source_srs_display_name?: string | null;
+  docs_generated: number;
+  docs_total: number;
   doc_system_arch_status?: string | null;
   doc_database_status?: string | null;
   doc_api_status?: string | null;
@@ -154,14 +193,8 @@ export interface KanbanTask {
   assigned_to_id: string | null;
   effort_hours: number | null;
   fr_references: string[] | null;
-  linked_fr: string | null;
   module_name: string | null;
   order_index: number;
-  suggested_file: string | null;
-  suggested_endpoint: string | null;
-  suggested_table: string | null;
-  spec_id: string | null;
-  spec_status: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -247,23 +280,31 @@ export interface ScreenModelInfo {
   source: string;
 }
 
-export interface AiModelOption {
-  provider: string;
-  model: string;
+export type AiTier = "free" | "low_cost" | "premium";
+
+export interface ProviderUsage {
+  requests: number;
+  tokens_in: number;
+  tokens_out: number;
+  requests_limit: number;
+  tokens_limit: number;
   label: string;
-  tier: string;
-  cost: string;
+  color: string;
 }
 
 export interface AiConfigResponse {
+  ai_tier: AiTier;
   free_mode_enabled: boolean;
   providers: AiProviderStatus[];
   paid_routing: AiRoutingRow[];
   free_routing: AiRoutingRow[];
+  low_cost_routing: AiRoutingRow[];
   screen_overrides: Record<string, { provider: string; model: string }>;
   screen_models: ScreenModelInfo[];
   paid_model_options: AiModelOption[];
   free_model_options: AiModelOption[];
+  low_cost_model_options: AiModelOption[];
+  daily_usage: Record<string, ProviderUsage>;
 }
 
 export class ApiClient {
@@ -278,40 +319,59 @@ export class ApiClient {
     return this.baseUrl.replace(/\/api\/v1$/, "");
   }
 
-  /** True when a cookie-based session is believed active (not the token itself). */
   getAccessToken(): string | null {
-    return this.sessionActive ? "cookie" : null;
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(ACCESS_TOKEN_KEY);
+  }
+
+  setTokens(access: string, refresh: string): void {
+    localStorage.setItem(ACCESS_TOKEN_KEY, access);
+    localStorage.setItem(REFRESH_TOKEN_KEY, refresh);
   }
 
   clearTokens(): void {
-    this.sessionActive = false;
+    localStorage.removeItem(ACCESS_TOKEN_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
   }
 
   private async request<T>(
     endpoint: string,
     options: RequestInit = {},
+    allowRefresh = true,
   ): Promise<T> {
     const headers = new Headers(options.headers);
     if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
       headers.set("Content-Type", "application/json");
     }
+    const token = this.getAccessToken();
+    if (token && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
     const url = endpoint.startsWith("http")
       ? endpoint
       : `${this.baseUrl}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
-    const fetchOptions: RequestInit = {
-      ...options,
-      headers,
-      credentials: "include",
-    };
-    const response = await fetch(url, fetchOptions);
-    if (
-      response.status === 401 &&
-      endpoint !== "/auth/refresh" &&
-      endpoint !== "/auth/login"
-    ) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        ...options,
+        headers,
+        credentials: "include",
+      });
+    } catch {
+      throw new Error(
+        "Cannot reach the API server. Check that the backend is running on port 8000.",
+      );
+    }
+    const isAuthEndpoint =
+      endpoint.includes("/auth/refresh") || endpoint.includes("/auth/login");
+    if (response.status === 401 && allowRefresh && !isAuthEndpoint) {
       try {
         await this.refresh();
-        const retry = await fetch(url, fetchOptions);
+        const retry = await fetch(url, {
+          ...options,
+          headers,
+          credentials: "include",
+        });
         if (!retry.ok) throw new Error(await retry.text());
         if (retry.status === 204) return undefined as T;
         return (await retry.json()) as T;
@@ -335,6 +395,11 @@ export class ApiClient {
     return (await response.json()) as T;
   }
 
+  getRefreshToken(): string | null {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(REFRESH_TOKEN_KEY);
+  }
+
   async health() {
     return this.request(`${this.getServerUrl()}/health`);
   }
@@ -346,25 +411,29 @@ export class ApiClient {
     });
   }
 
-  async login(body: { email: string; password: string }): Promise<TokenResponse> {
+  async login(body: { email: string; password: string }): Promise<{ token_type: string }> {
+    // Backend sets HttpOnly auth cookies; the response body has no tokens.
     const form = new URLSearchParams();
     form.set("username", body.email);
     form.set("password", body.password);
-    const result = await this.request<TokenResponse>("/auth/login", {
+    return this.request<{ token_type: string }>("/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: form.toString(),
     });
-    this.sessionActive = true;
-    return result;
   }
 
-  async refresh(): Promise<TokenResponse> {
-    const result = await this.request<TokenResponse>("/auth/refresh", {
+  async refresh(): Promise<{ token_type: string }> {
+    // Refresh uses the HttpOnly refresh cookie; no body needed.
+    const response = await fetch(`${this.baseUrl}/auth/refresh`, {
       method: "POST",
+      credentials: "include",
     });
-    this.sessionActive = true;
-    return result;
+    if (!response.ok) {
+      this.clearTokens();
+      throw new Error("Session expired");
+    }
+    return (await response.json()) as { token_type: string };
   }
 
   async logout(): Promise<void> {
@@ -389,13 +458,25 @@ export class ApiClient {
     return this.request(`/jobs/${taskId}`);
   }
 
+  // AI model catalog + per-action override
+  async listAiModels(): Promise<AiModelCatalog> {
+    return this.request("/ai/models");
+  }
+
+  /** Build ?model_provider=&model_id= query suffix for a one-shot model choice. */
+  private modelQS(model?: ModelChoice | null, hasQuery = false): string {
+    if (!model?.provider || !model?.model) return "";
+    const sep = hasQuery ? "&" : "?";
+    return `${sep}model_provider=${encodeURIComponent(model.provider)}&model_id=${encodeURIComponent(model.model)}`;
+  }
+
   subscribeTask(
     taskId: string,
     onUpdate: (data: TaskStatus) => void,
     onDone?: () => void,
   ): EventSource {
     const url = `${this.getServerUrl()}/api/v1/jobs/${taskId}/stream`;
-    const es = new EventSource(url);
+    const es = new EventSource(url, { withCredentials: true });
     es.onmessage = (event) => {
       const data = JSON.parse(event.data) as TaskStatus;
       onUpdate(data);
@@ -437,12 +518,12 @@ export class ApiClient {
   }
 
   // Requirements
-  async uploadRequirement(projectId: string, file: File) {
+  async uploadRequirement(projectId: string, file: File, model?: ModelChoice | null) {
     const form = new FormData();
     form.append("project_id", projectId);
     form.append("file", file);
     return this.request<{ requirement_id: string; task_id: string }>(
-      "/requirements/upload",
+      `/requirements/upload${this.modelQS(model)}`,
       { method: "POST", body: form },
     );
   }
@@ -452,24 +533,74 @@ export class ApiClient {
   async listRequirements(projectId: string): Promise<Requirement[]> {
     return this.request(`/requirements/project/${projectId}`);
   }
+  async deleteRequirement(id: string): Promise<void> {
+    return this.request(`/requirements/${id}`, { method: "DELETE" });
+  }
+  async regenerateRequirement(id: string, model?: ModelChoice | null) {
+    return this.request<{ requirement_id: string; task_id: string; status: string }>(
+      `/requirements/${id}/regenerate${this.modelQS(model)}`,
+      { method: "POST" },
+    );
+  }
   async getCostEstimate(id: string): Promise<Record<string, unknown>> {
     return this.request(`/requirements/${id}/cost-estimate`);
   }
-  async uploadFeedback(requirementId: string, file: File) {
+  async uploadFeedback(requirementId: string, file: File, model?: ModelChoice | null) {
     const form = new FormData();
     form.append("file", file);
-    return this.request(`/requirements/${requirementId}/feedback-upload`, {
+    return this.request(`/requirements/${requirementId}/feedback-document${this.modelQS(model)}`, {
       method: "POST",
       body: form,
     });
+  }
+  async synthesizeRequirement(id: string, model?: ModelChoice | null) {
+    return this.request<Record<string, unknown>>(
+      `/requirements/${id}/synthesize${this.modelQS(model)}`,
+      { method: "POST" },
+    );
+  }
+  async reanalyzeRequirement(
+    id: string,
+    instructions: string,
+    model?: ModelChoice | null,
+  ) {
+    return this.request<Record<string, unknown>>(
+      `/requirements/${id}/reanalyze${this.modelQS(model)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ instructions }),
+      },
+    );
   }
   getClarificationPdfUrl(id: string): string {
     return `${this.baseUrl}/documents/requirements/${id}/clarification-pdf`;
   }
 
+  async downloadClarificationPdf(id: string): Promise<void> {
+    const url = this.getClarificationPdfUrl(id);
+    const response = await fetch(url, { credentials: "include" });
+    if (!response.ok) {
+      let message = `Download failed (${response.status})`;
+      try {
+        const body = (await response.json()) as { detail?: string };
+        if (body.detail) message = body.detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new Error(message);
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = `clarification-${id}.pdf`;
+    link.click();
+    URL.revokeObjectURL(objectUrl);
+  }
+
   // PRDs
-  async generatePrd(projectId: string, requirementId: string) {
-    return this.request("/prds/generate", {
+  async generatePrd(projectId: string, requirementId: string, model?: ModelChoice | null) {
+    return this.request(`/prds/generate${this.modelQS(model)}`, {
       method: "POST",
       body: JSON.stringify({ project_id: projectId, requirement_id: requirementId }),
     });
@@ -495,10 +626,19 @@ export class ApiClient {
   getPrdPdfUrl(id: string): string {
     return `${this.baseUrl}/documents/prd/${id}/export-pdf/sync`;
   }
+  async deletePrd(id: string): Promise<void> {
+    return this.request(`/prds/${id}`, { method: "DELETE" });
+  }
+  async regeneratePrd(id: string, model?: ModelChoice | null) {
+    return this.request<{ prd_id: string; task_id: string; status: string }>(
+      `/prds/${id}/regenerate${this.modelQS(model)}`,
+      { method: "POST" },
+    );
+  }
 
   // SRS
-  async generateSrs(projectId: string, prdId: string) {
-    return this.request("/srs/generate", {
+  async generateSrs(projectId: string, prdId: string, model?: ModelChoice | null) {
+    return this.request(`/srs/generate${this.modelQS(model)}`, {
       method: "POST",
       body: JSON.stringify({ project_id: projectId, prd_id: prdId }),
     });
@@ -518,20 +658,34 @@ export class ApiClient {
   getSrsPdfUrl(id: string): string {
     return `${this.baseUrl}/documents/srs/${id}/export-pdf/sync`;
   }
+  async deleteSrs(id: string): Promise<void> {
+    return this.request(`/srs/${id}`, { method: "DELETE" });
+  }
+  async regenerateSrs(id: string, model?: ModelChoice | null) {
+    return this.request<{ srs_id: string; task_id: string; status: string }>(
+      `/srs/${id}/regenerate${this.modelQS(model)}`,
+      { method: "POST" },
+    );
+  }
 
   // Architecture
-  async generateArchitecture(projectId: string, srsId: string) {
+  async generateArchitecture(
+    projectId: string,
+    srsId: string,
+    model?: ModelChoice | null,
+  ) {
     return this.request<{
       architecture_id: string;
       task_id: string;
       status: string;
-    }>("/architecture/generate", {
+    }>(`/architecture/generate${this.modelQS(model)}`, {
       method: "POST",
       body: JSON.stringify({ project_id: projectId, srs_id: srsId }),
     });
   }
-  async listArchitectures(projectId: string): Promise<ArchitectureListItem[]> {
-    return this.request(`/architecture/project/${projectId}`);
+  async listArchitectures(projectId?: string): Promise<ArchitectureListItem[]> {
+    const q = projectId ? `?project_id=${projectId}` : "";
+    return this.request(`/architecture${q}`);
   }
   async getArchitecture(id: string): Promise<Architecture> {
     return this.request(`/architecture/${id}`);
@@ -542,60 +696,92 @@ export class ApiClient {
   async finalizeArchitecture(id: string): Promise<Architecture> {
     return this.request(`/architecture/${id}/finalize`, { method: "PATCH" });
   }
-  async resumeArchitecture(id: string) {
-    return this.request<{ architecture_id: string; task_id: string; status: string }>(
-      `/architecture/${id}/resume`,
-      { method: "POST" },
-    );
-  }
-  async regenerateArchitecture(id: string) {
-    return this.request<{ architecture_id: string; task_id: string; status: string }>(
-      `/architecture/${id}/regenerate`,
-      { method: "POST" },
-    );
-  }
-  async generateArchitectureDoc(id: string, docKey: string) {
-    return this.request<{ task_id: string; doc_key: string; status: string }>(
-      `/architecture/${id}/generate-doc`,
-      { method: "POST", body: JSON.stringify({ doc_key: docKey }) },
-    );
-  }
-  async regenerateArchitectureDoc(
-    id: string,
-    docKey: string,
-    instructions = "",
-  ): Promise<{ task_id: string; doc_key: string; status: string }> {
-    return this.request(`/architecture/${id}/regenerate-doc`, {
-      method: "POST",
-      body: JSON.stringify({ doc_key: docKey, instructions }),
-    });
-  }
-  async cancelArchitectureGeneration(id: string) {
-    return this.request<{ status: string }>(`/architecture/${id}/cancel`, {
-      method: "POST",
-    });
-  }
-  async cancelArchitectureDoc(id: string, docKey: string) {
-    return this.request<{ status: string; doc_key: string }>(
-      `/architecture/${id}/cancel-doc/${docKey}`,
-      { method: "POST" },
-    );
-  }
-  async clearArchitectureDoc(id: string, docKey: string): Promise<Architecture> {
-    return this.request(`/architecture/${id}/doc/${docKey}`, { method: "DELETE" });
-  }
-  async saveArchitectureDoc(
+  async updateArchitectureDoc(
     id: string,
     docKey: string,
     content: Record<string, unknown>,
   ): Promise<Architecture> {
-    return this.request(`/architecture/${id}/doc/${docKey}/save`, {
+    return this.request(`/architecture/${id}/doc`, {
       method: "PATCH",
       body: JSON.stringify({ doc_key: docKey, content }),
     });
   }
   async deleteArchitecture(id: string): Promise<void> {
     return this.request(`/architecture/${id}`, { method: "DELETE" });
+  }
+  async regenerateArchitecture(id: string) {
+    return this.request<{
+      architecture_id: string;
+      task_id: string;
+      status: string;
+    }>(`/architecture/${id}/regenerate`, { method: "POST" });
+  }
+  async consolidateArchitecture(id: string) {
+    return this.request<{
+      architecture_id: string;
+      task_id: string;
+      status: string;
+    }>(`/architecture/${id}/consolidate`, { method: "POST" });
+  }
+  async resumeArchitecture(id: string, model?: ModelChoice | null) {
+    return this.request<{
+      architecture_id: string;
+      task_id: string;
+      status: string;
+    }>(`/architecture/${id}/resume${this.modelQS(model)}`, { method: "POST" });
+  }
+  async generateArchitectureDoc(id: string, docKey: string, model?: ModelChoice | null) {
+    return this.request<{
+      architecture_id: string;
+      task_id: string;
+      status: string;
+    }>(`/architecture/${id}/generate-doc/${docKey}${this.modelQS(model)}`, {
+      method: "POST",
+    });
+  }
+  async cancelArchitectureDoc(id: string, docKey: string) {
+    return this.request<{
+      architecture_id: string;
+      doc_key: string;
+      status: string;
+    }>(`/architecture/${id}/cancel-doc/${docKey}`, { method: "POST" });
+  }
+  async regenerateArchitectureDoc(id: string, docKey: string, model?: ModelChoice | null) {
+    return this.request<{
+      architecture_id: string;
+      task_id: string;
+      status: string;
+    }>(`/architecture/${id}/regenerate-doc/${docKey}${this.modelQS(model)}`, {
+      method: "POST",
+    });
+  }
+  async deleteArchitectureDoc(id: string, docKey: string): Promise<Architecture> {
+    return this.request(`/architecture/${id}/doc/${docKey}`, { method: "DELETE" });
+  }
+  async aiEditArchitectureDoc(
+    id: string,
+    docKey: string,
+    currentContent: Record<string, unknown>,
+    instruction: string,
+    model?: ModelChoice | null,
+  ): Promise<{ corrected_content: Record<string, unknown> }> {
+    return this.request(`/architecture/${id}/doc/${docKey}/ai-edit${this.modelQS(model)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        instruction,
+        current_content: currentContent,
+      }),
+    });
+  }
+  async polishArchitectureForExport(
+    id: string,
+    body: { mode: "full" | "section"; doc_key?: string },
+    model?: ModelChoice | null,
+  ): Promise<{ documents: Record<string, Record<string, unknown>> }> {
+    return this.request(`/architecture/${id}/polish-export${this.modelQS(model)}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
   }
 
   // Kanban tasks
@@ -611,52 +797,22 @@ export class ApiClient {
       body: JSON.stringify({ status, note }),
     });
   }
-  async updateTask(taskId: string, body: Partial<KanbanTask>) {
-    return this.request<KanbanTask>(`/tasks/${taskId}`, {
-      method: "PATCH",
-      body: JSON.stringify(body),
-    });
-  }
-  async extractModules(
-    projectId: string,
-    srsId: string,
-    options: { replace_existing?: boolean; fill_gaps_only?: boolean } = {},
-  ) {
-    return this.request<{ task_id: string; status: string; warning?: string }>("/tasks/extract-modules", {
+  async extractModules(projectId: string, srsId: string) {
+    return this.request<{ task_id: string; status: string }>("/tasks/extract-modules", {
       method: "POST",
-      body: JSON.stringify({ project_id: projectId, srs_id: srsId, ...options }),
-    });
-  }
-  async getTaskCoverage(projectId: string) {
-    return this.request<{
-      total_frs: number;
-      covered_frs: number;
-      missing_frs: string[];
-      total_tasks: number;
-      tasks_with_spec: number;
-      tasks_done: number;
-      has_tasks: boolean;
-      all_done: boolean;
-      coverage_pct: number;
-    }>(`/tasks/coverage/${projectId}`);
-  }
-  async generateOrchestration(projectId: string) {
-    return this.request<{ task_id: string; status: string }>(`/tasks/orchestration/${projectId}`, {
-      method: "POST",
-    });
-  }
-  async clearBoardTasks(projectId: string) {
-    return this.request<{ deleted_tasks: number; deleted_specs: number }>(`/tasks/clear/${projectId}`, {
-      method: "DELETE",
+      body: JSON.stringify({ project_id: projectId, srs_id: srsId }),
     });
   }
 
   // Specs
-  async generateSpec(taskId: string) {
-    return this.request<{ spec_id: string; task_id_celery: string }>("/specs/generate", {
-      method: "POST",
-      body: JSON.stringify({ task_id: taskId }),
-    });
+  async generateSpec(taskId: string, model?: ModelChoice | null) {
+    return this.request<{ spec_id: string; task_id_celery: string }>(
+      `/specs/generate${this.modelQS(model)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ task_id: taskId }),
+      },
+    );
   }
   async getSpec(specId: string): Promise<TaskSpec> {
     return this.request(`/specs/${specId}`);
@@ -669,6 +825,26 @@ export class ApiClient {
       method: "PATCH",
       body: JSON.stringify({ assigned_to_id: assignedToId }),
     });
+  }
+  async updateSpec(specId: string, content: Record<string, unknown>): Promise<TaskSpec> {
+    return this.request(`/specs/${specId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ content_json: content }),
+    });
+  }
+  async deleteSpec(specId: string): Promise<void> {
+    return this.request(`/specs/${specId}`, { method: "DELETE" });
+  }
+  async regenerateSpec(specId: string, model?: ModelChoice | null) {
+    return this.request<{
+      spec_id: string;
+      task_id: string;
+      task_id_celery: string;
+      status: string;
+    }>(`/specs/${specId}/regenerate${this.modelQS(model)}`, { method: "POST" });
+  }
+  async deleteTask(taskId: string): Promise<void> {
+    return this.request(`/tasks/${taskId}`, { method: "DELETE" });
   }
 
   // Knowledge base
@@ -720,6 +896,12 @@ export class ApiClient {
   }
   async getAiConfigForScreens(): Promise<AiConfigResponse> {
     return this.request("/admin/ai-config/screen");
+  }
+  async setAiTier(tier: AiTier): Promise<AiConfigResponse> {
+    return this.request("/admin/ai-config/tier", {
+      method: "PATCH",
+      body: JSON.stringify({ tier }),
+    });
   }
   async setFreeMode(enabled: boolean): Promise<AiConfigResponse> {
     return this.request("/admin/ai-config/free-mode", {

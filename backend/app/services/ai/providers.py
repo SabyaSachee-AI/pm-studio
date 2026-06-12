@@ -4,139 +4,334 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+AiTier = str  # "free" | "low_cost" | "premium"
+
+ALL_PROVIDERS: tuple[str, ...] = (
+    "anthropic",
+    "openai",
+    "openrouter",
+    "groq",
+    "gemini",
+    "cerebras",
+    "deepseek",
+    "together",
+)
+
 
 class RoutingEntry(TypedDict, total=False):
     task_label: str
-    model_1: tuple[str, str]
-    model_2: tuple[str, str]
-    model_3: tuple[str, str]
-    model_4: tuple[str, str]
     quality_note: str
     prompt_enhancement: bool
     quality_stars: int
+    # model_1 .. model_15 populated by _build_free_routing
 
+
+def _build_free_routing(
+    *,
+    task_label: str,
+    top4: list[tuple[str, str]],
+    quality_note: str = "",
+    quality_stars: int = 4,
+    prompt_enhancement: bool = False,
+) -> RoutingEntry:
+    """Merge task-specific top-4 with shared tail; dedupe; cap at 15 models."""
+    seen: set[tuple[str, str]] = set()
+    ordered: list[tuple[str, str]] = []
+    for entry in top4 + SHARED_FREE_TAIL:
+        if entry not in seen:
+            seen.add(entry)
+            ordered.append(entry)
+        if len(ordered) >= 15:
+            break
+    result: RoutingEntry = {
+        "task_label": task_label,
+        "quality_note": quality_note,
+        "quality_stars": quality_stars,
+        "prompt_enhancement": prompt_enhancement,
+    }
+    for idx, pair in enumerate(ordered, start=1):
+        result[f"model_{idx}"] = pair  # type: ignore[literal-required]
+    return result
+
+
+# Shared fallback tail — multi-provider free pool (Together omitted: no reliable free tier)
+SHARED_FREE_TAIL: list[tuple[str, str]] = [
+    ("groq", "llama-4-scout-17b-16e-instruct"),
+    ("groq", "llama-3.3-70b-versatile"),
+    ("openrouter", "moonshotai/kimi-k2.6:free"),
+    ("groq", "qwen/qwen3-32b"),
+    ("cerebras", "zai-glm-4.7"),
+    ("openrouter", "poolside/laguna-xs.2:free"),
+    ("openrouter", "openai/gpt-oss-20b:free"),
+    ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
+    ("openrouter", "google/gemma-4-31b-it:free"),
+]
 
 FREE_ROUTING: dict[str, RoutingEntry] = {
-    "req_analyze": {
-        "task_label": "Requirement Analysis",
-        "model_1": ("openrouter", "meta-llama/llama-4-maverick:free"),
-        "model_2": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_3": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": (
-            "Maverick chosen: 128K context needed for full PDF analysis. "
-            "Best free model for long-document understanding."
+    "req_analyze": _build_free_routing(
+        task_label="Requirement Analysis",
+        top4=[
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("openrouter", "openrouter/owl-alpha"),
+        ],
+        quality_note="Gemini 2.5 Flash + Nemotron Super for full-PDF context.",
+        quality_stars=5,
+        prompt_enhancement=True,
+    ),
+    "prd_generate": _build_free_routing(
+        task_label="PRD Generation",
+        top4=[
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+            ("openrouter", "google/gemma-4-31b-it:free"),
+        ],
+        quality_note="GPT-OSS 120B: best structured JSON for PRDSchema.",
+        quality_stars=5,
+        prompt_enhancement=True,
+    ),
+    "srs_generate": _build_free_routing(
+        task_label="SRS Generation (IEEE 830)",
+        top4=[
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+            ("openrouter", "google/gemma-4-31b-it:free"),
+        ],
+        quality_note="GPT-OSS 120B follows IEEE 830 numbering reliably.",
+        quality_stars=5,
+        prompt_enhancement=True,
+    ),
+    "arch_generate": _build_free_routing(
+        task_label="Architecture Suite (6 docs)",
+        top4=[
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "poolside/laguna-m.1:free"),
+            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+        ],
+        quality_note=(
+            "Gemini 2.5 Flash first — fast reasoning for cross-linked arch JSON. "
+            "Laguna M.1 for coding-heavy docs."
         ),
-        "prompt_enhancement": True,
-        "quality_stars": 4,
-    },
-    "prd_generate": {
-        "task_label": "PRD Generation",
-        "model_1": ("openrouter", "meta-llama/llama-4-maverick:free"),
-        "model_2": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_3": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": (
-            "Maverick: best free structured output for nested JSON with features + stories."
-        ),
-        "quality_stars": 4,
-    },
-    "srs_generate": {
-        "task_label": "SRS Generation (IEEE 830)",
-        "model_1": ("openrouter", "meta-llama/llama-4-maverick:free"),
-        "model_2": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_3": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": "Maverick handles IEEE 830 numbered FR format reliably.",
-        "quality_stars": 4,
-    },
-    "req_synthesize": {
-        "task_label": "Feedback Synthesis",
-        "model_1": ("openrouter", "meta-llama/llama-4-maverick:free"),
-        "model_2": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_3": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": "Combining 2 docs needs 128K context.",
-        "quality_stars": 4,
-    },
-    "arch_generate": {
-        "task_label": "Architecture Suite",
-        "model_1": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_2": ("openrouter", "meta-llama/llama-4-maverick:free"),
-        "model_3": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": (
-            "Llama 3.3 70B first: most reliable for deeply nested JSON schemas "
-            "(db_schema, api_endpoints structure). Maverick as fallback."
-        ),
-        "quality_stars": 4,
-    },
-    "prd_rewrite": {
-        "task_label": "PRD Rewrite",
-        "model_1": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_2": ("openrouter", "meta-llama/llama-4-maverick:free"),
-        "model_3": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": "70B reliable for guided rewrite tasks.",
-        "quality_stars": 4,
-    },
-    "srs_rewrite": {
-        "task_label": "SRS Rewrite",
-        "model_1": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_2": ("openrouter", "meta-llama/llama-4-maverick:free"),
-        "model_3": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": "70B handles structured SRS rewrites.",
-        "quality_stars": 4,
-    },
-    "spec_generate": {
-        "task_label": "Task Specification",
-        "model_1": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_2": ("openrouter", "meta-llama/llama-4-maverick:free"),
-        "model_3": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": "Specs need precise file paths + code context. 70B most reliable.",
-        "quality_stars": 4,
-    },
-    "arch_single_doc": {
-        "task_label": "Architecture Doc (single retry)",
-        "model_1": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_2": ("openrouter", "meta-llama/llama-4-maverick:free"),
-        "model_3": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": "Single doc retry — 70B sufficient.",
-        "quality_stars": 4,
-    },
-    "module_extract": {
-        "task_label": "Module Extraction",
-        "model_1": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_2": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_3": ("openrouter", "meta-llama/llama-3.1-8b-instruct:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": "Scout fast + capable for list extraction.",
-        "quality_stars": 3,
-    },
-    "quality_check": {
-        "task_label": "Quality Check",
-        "model_1": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_2": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_3": ("openrouter", "meta-llama/llama-3.1-8b-instruct:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": "Scout handles yes/no checklist well.",
-        "quality_stars": 3,
-    },
-    "cost_estimate": {
-        "task_label": "Cost Estimation",
-        "model_1": ("openrouter", "meta-llama/llama-3.1-8b-instruct:free"),
-        "model_2": ("openrouter", "meta-llama/llama-4-scout:free"),
-        "model_3": ("openrouter", "meta-llama/llama-3.3-70b-instruct:free"),
-        "model_4": ("openrouter", "openrouter/auto"),
-        "quality_note": (
-            "PERT math only — 8B more than enough. "
-            "Saves free tier rate limits for complex tasks."
-        ),
-        "quality_stars": 3,
-    },
+        quality_stars=5,
+        prompt_enhancement=True,
+    ),
+    "req_synthesize": _build_free_routing(
+        task_label="Feedback Synthesis",
+        top4=[
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("openrouter", "openrouter/owl-alpha"),
+        ],
+        quality_note="1M context models fit requirement + full feedback in one call.",
+        quality_stars=5,
+        prompt_enhancement=True,
+    ),
+    "prd_rewrite": _build_free_routing(
+        task_label="PRD Rewrite",
+        top4=[
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("openrouter", "google/gemma-4-31b-it:free"),
+            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+            ("openrouter", "openai/gpt-oss-20b:free"),
+        ],
+        quality_stars=4,
+    ),
+    "srs_rewrite": _build_free_routing(
+        task_label="SRS Rewrite",
+        top4=[
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("openrouter", "google/gemma-4-31b-it:free"),
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "openai/gpt-oss-20b:free"),
+        ],
+        quality_stars=4,
+    ),
+    "spec_generate": _build_free_routing(
+        task_label="Task Specification",
+        top4=[
+            ("openrouter", "poolside/laguna-m.1:free"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+        ],
+        quality_note="Laguna M.1 is purpose-built for Cursor-ready specs.",
+        quality_stars=5,
+        prompt_enhancement=True,
+    ),
+    "arch_single_doc": _build_free_routing(
+        task_label="Architecture Doc (single)",
+        top4=[
+            ("openrouter", "poolside/laguna-m.1:free"),
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("openrouter", "google/gemma-4-31b-it:free"),
+        ],
+        quality_stars=4,
+    ),
+    "module_extract": _build_free_routing(
+        task_label="Module Extraction",
+        top4=[
+            ("openrouter", "openai/gpt-oss-20b:free"),
+            ("groq", "llama-4-scout-17b-16e-instruct"),
+            ("openrouter", "google/gemma-4-26b-a4b-it:free"),
+            ("cerebras", "zai-glm-4.7"),
+        ],
+        quality_stars=3,
+    ),
+    "quality_check": _build_free_routing(
+        task_label="Quality Check",
+        top4=[
+            ("openrouter", "openai/gpt-oss-20b:free"),
+            ("groq", "llama-4-scout-17b-16e-instruct"),
+            ("cerebras", "zai-glm-4.7"),
+            ("openrouter", "google/gemma-4-26b-a4b-it:free"),
+        ],
+        quality_stars=3,
+    ),
+    "cost_estimate": _build_free_routing(
+        task_label="Cost Estimation",
+        top4=[
+            ("openrouter", "openai/gpt-oss-20b:free"),
+            ("groq", "llama-4-scout-17b-16e-instruct"),
+            ("cerebras", "zai-glm-4.7"),
+            ("openrouter", "google/gemma-4-26b-a4b-it:free"),
+        ],
+        quality_stars=3,
+    ),
+}
+
+LOW_COST_ROUTING: dict[str, RoutingEntry] = {
+    "req_analyze": _build_free_routing(
+        task_label="Requirement Analysis (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+        ],
+        quality_note="DeepSeek V3 ~$0.14/1M tokens — best value for analysis.",
+        quality_stars=4,
+    ),
+    "prd_generate": _build_free_routing(
+        task_label="PRD Generation (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+        ],
+        quality_stars=4,
+        prompt_enhancement=True,
+    ),
+    "srs_generate": _build_free_routing(
+        task_label="SRS Generation (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+        ],
+        quality_stars=4,
+        prompt_enhancement=True,
+    ),
+    "arch_generate": _build_free_routing(
+        task_label="Architecture Suite (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "poolside/laguna-m.1:free"),
+        ],
+        quality_note="DeepSeek for nested JSON; Together 70B Turbo as fast fallback.",
+        quality_stars=4,
+        prompt_enhancement=True,
+    ),
+    "req_synthesize": _build_free_routing(
+        task_label="Feedback Synthesis (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("gemini", "gemini-2.5-flash"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+        ],
+        quality_stars=4,
+    ),
+    "prd_rewrite": _build_free_routing(
+        task_label="PRD Rewrite (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+        ],
+        quality_stars=4,
+    ),
+    "srs_rewrite": _build_free_routing(
+        task_label="SRS Rewrite (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+        ],
+        quality_stars=4,
+    ),
+    "spec_generate": _build_free_routing(
+        task_label="Task Specification (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("openrouter", "poolside/laguna-m.1:free"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+            ("gemini", "gemini-2.5-flash"),
+        ],
+        quality_stars=4,
+        prompt_enhancement=True,
+    ),
+    "arch_single_doc": _build_free_routing(
+        task_label="Architecture Doc single (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("openrouter", "poolside/laguna-m.1:free"),
+            ("gemini", "gemini-2.5-flash"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+        ],
+        quality_stars=4,
+    ),
+    "module_extract": _build_free_routing(
+        task_label="Module Extraction (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("groq", "llama-4-scout-17b-16e-instruct"),
+            ("openrouter", "openai/gpt-oss-20b:free"),
+            ("cerebras", "zai-glm-4.7"),
+        ],
+        quality_stars=3,
+    ),
+    "quality_check": _build_free_routing(
+        task_label="Quality Check (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("groq", "llama-4-scout-17b-16e-instruct"),
+            ("openrouter", "openai/gpt-oss-20b:free"),
+            ("cerebras", "zai-glm-4.7"),
+        ],
+        quality_stars=3,
+    ),
+    "cost_estimate": _build_free_routing(
+        task_label="Cost Estimation (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("groq", "llama-4-scout-17b-16e-instruct"),
+            ("openrouter", "openai/gpt-oss-20b:free"),
+            ("cerebras", "zai-glm-4.7"),
+        ],
+        quality_stars=3,
+    ),
 }
 
 FREE_MODE_QUALITY_BOOSTS: dict[str, str] = {
@@ -192,15 +387,33 @@ SCREEN_DEFAULT_TASK: dict[str, str] = {
     "tasks": "spec_generate",
 }
 
+TIER_ROUTING_TABLES: dict[str, dict[str, RoutingEntry]] = {
+    "free": FREE_ROUTING,
+    "low_cost": LOW_COST_ROUTING,
+    "premium": {},  # uses DEFAULT_PAID_ROUTING directly
+}
+
 MODEL_DISPLAY_NAMES: dict[str, str] = {
     "claude-sonnet-4-5": "Claude Sonnet 4.5",
     "claude-haiku-4-5": "Claude Haiku 4.5",
     "gpt-4o": "GPT-4o",
-    "meta-llama/llama-4-maverick:free": "Llama 4 Maverick (free)",
-    "meta-llama/llama-3.3-70b-instruct:free": "Llama 3.3 70B (free)",
-    "meta-llama/llama-4-scout:free": "Llama 4 Scout (free)",
-    "meta-llama/llama-3.1-8b-instruct:free": "Llama 3.1 8B (free)",
-    "openrouter/auto": "OpenRouter Auto",
+    "gemini-2.5-flash": "Gemini 2.5 Flash",
+    "deepseek-chat": "DeepSeek V3",
+    "openai/gpt-oss-120b:free": "OpenAI GPT-OSS 120B (FREE)",
+    "openai/gpt-oss-20b:free": "OpenAI GPT-OSS 20B (FREE)",
+    "nvidia/nemotron-3-super-120b-a12b:free": "NVIDIA Nemotron 3 Super (FREE)",
+    "nvidia/nemotron-3-ultra-550b-a55b:free": "NVIDIA Nemotron Ultra 550B (FREE)",
+    "google/gemma-4-31b-it:free": "Google Gemma 4 31B (FREE)",
+    "google/gemma-4-26b-a4b-it:free": "Google Gemma 4 26B MoE (FREE)",
+    "poolside/laguna-m.1:free": "Poolside Laguna M.1 (FREE)",
+    "poolside/laguna-xs.2:free": "Poolside Laguna XS.2 (FREE)",
+    "openrouter/owl-alpha": "OpenRouter Owl Alpha (FREE)",
+    "moonshotai/kimi-k2.6:free": "Kimi K2.6 (FREE)",
+    "llama-4-scout-17b-16e-instruct": "Llama 4 Scout (Groq)",
+    "llama-3.3-70b-versatile": "Llama 3.3 70B (Groq)",
+    "qwen/qwen3-32b": "Qwen3 32B (Groq)",
+    "zai-glm-4.7": "GLM 4.7 (Cerebras)",
+    "meta-llama/Llama-3.3-70B-Instruct-Turbo": "Llama 3.3 70B Turbo (Together)",
 }
 
 PAID_MODEL_OPTIONS: list[dict[str, str]] = [
@@ -227,25 +440,56 @@ PAID_MODEL_OPTIONS: list[dict[str, str]] = [
     },
 ]
 
+LOW_COST_MODEL_OPTIONS: list[dict[str, str]] = [
+    {
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+        "label": "DeepSeek V3",
+        "tier": "Best value",
+        "cost": "$",
+    },
+    {
+        "provider": "together",
+        "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "label": "Llama 3.3 70B Turbo",
+        "tier": "Fast GPU",
+        "cost": "$",
+    },
+]
+
 FREE_MODEL_OPTIONS: list[dict[str, str]] = [
     {
         "provider": "openrouter",
-        "model": "meta-llama/llama-4-maverick:free",
-        "label": "Llama 4 Maverick (free)",
-        "tier": "Best free",
+        "model": "openai/gpt-oss-120b:free",
+        "label": "OpenAI GPT-OSS 120B (FREE)",
+        "tier": "Best JSON",
+        "cost": "Free",
+    },
+    {
+        "provider": "gemini",
+        "model": "gemini-2.5-flash",
+        "label": "Gemini 2.5 Flash (FREE)",
+        "tier": "Reasoning",
         "cost": "Free",
     },
     {
         "provider": "openrouter",
-        "model": "meta-llama/llama-3.3-70b-instruct:free",
-        "label": "Llama 3.3 70B (free)",
-        "tier": "Structured JSON",
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "label": "NVIDIA Nemotron 3 Super (FREE)",
+        "tier": "1M context",
         "cost": "Free",
     },
     {
         "provider": "openrouter",
-        "model": "meta-llama/llama-4-scout:free",
-        "label": "Llama 4 Scout (free)",
+        "model": "poolside/laguna-m.1:free",
+        "label": "Poolside Laguna M.1 (FREE)",
+        "tier": "Coding agent",
+        "cost": "Free",
+    },
+    {
+        "provider": "groq",
+        "model": "llama-3.3-70b-versatile",
+        "label": "Llama 3.3 70B (Groq FREE)",
         "tier": "Fast",
         "cost": "Free",
     },
@@ -257,14 +501,40 @@ def model_display_name(model: str) -> str:
     return MODEL_DISPLAY_NAMES.get(model, model.split("/")[-1])
 
 
+def chain_fallback_summary(routing: RoutingEntry, max_labels: int = 4) -> str:
+    """Summarize fallback chain for admin UI."""
+    labels: list[str] = []
+    for idx in range(2, 16):
+        entry = routing.get(f"model_{idx}")
+        if not entry:
+            break
+        labels.append(model_display_name(entry[1]).replace(" (FREE)", ""))
+        if len(labels) >= max_labels:
+            remaining = sum(1 for j in range(idx + 1, 16) if routing.get(f"model_{j}"))
+            if remaining:
+                labels.append(f"+{remaining} more")
+            break
+    return " → ".join(labels) if labels else ""
+
+
 def free_fallback_chain(task_type: str) -> str:
     """Summarize free-mode fallback chain for UI."""
     routing = FREE_ROUTING.get(task_type)
     if not routing:
         return ""
-    labels = []
-    for key in ("model_2", "model_3", "model_4"):
-        entry = routing.get(key)
-        if entry:
-            labels.append(model_display_name(entry[1]).replace(" (free)", ""))
-    return " → ".join(labels) if labels else ""
+    return chain_fallback_summary(routing)
+
+
+def low_cost_fallback_chain(task_type: str) -> str:
+    """Summarize low-cost fallback chain for UI."""
+    routing = LOW_COST_ROUTING.get(task_type)
+    if not routing:
+        return ""
+    return chain_fallback_summary(routing)
+
+
+def routing_for_tier(tier: str) -> dict[str, RoutingEntry]:
+    """Return routing table for a cost tier."""
+    if tier == "premium":
+        return {}
+    return TIER_ROUTING_TABLES.get(tier, FREE_ROUTING)
