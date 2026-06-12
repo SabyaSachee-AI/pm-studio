@@ -32,6 +32,7 @@ from app.services.ai.providers import (
     routing_for_tier,
 )
 from app.services.ai.model_override import get_model_override
+from app.services.ai.job_progress import publish_job_progress
 from app.services.ai.usage_tracker import increment_usage
 
 T = TypeVar("T", bound=BaseModel)
@@ -48,6 +49,13 @@ _DEFAULT_MAX_RETRIES = 3
 
 _COOLDOWN_DAILY_QUOTA_SEC = 3600
 _COOLDOWN_RATE_LIMIT_SEC = 120
+_SAME_MODEL_RATE_LIMIT_RETRIES = 1
+_RATE_LIMIT_BACKOFF_BASE_SEC = 1.0
+_RATE_LIMIT_BACKOFF_MAX_SEC = 30.0
+_CONTINUE_INSTRUCTION = (
+    "Continue exactly where the assistant left off. "
+    "Do not repeat previous sentences or add introductory remarks."
+)
 
 _PROVIDER_BASE_URLS: dict[str, str | None] = {
     "openai": None,
@@ -57,6 +65,13 @@ _PROVIDER_BASE_URLS: dict[str, str | None] = {
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
     "cerebras": "https://api.cerebras.ai/v1",
     "deepseek": "https://api.deepseek.com",
+    "sambanova": "https://api.sambanova.ai/v1",
+    "nvidia": "https://integrate.api.nvidia.com/v1",
+    "huggingface": "https://router.huggingface.co/v1",
+    "aimlapi": "https://api.aimlapi.com/v1",
+    "siliconflow": "https://api.siliconflow.cn/v1",
+    "alibaba": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "github": "https://models.inference.ai.azure.com",
 }
 
 _OPENAI_COMPAT_INSTRUCTOR_MODES: dict[str, instructor.Mode] = {
@@ -67,20 +82,39 @@ _OPENAI_COMPAT_INSTRUCTOR_MODES: dict[str, instructor.Mode] = {
     "gemini": instructor.Mode.JSON,
     "cerebras": instructor.Mode.JSON,
     "deepseek": instructor.Mode.JSON,
+    "sambanova": instructor.Mode.JSON,
+    "nvidia": instructor.Mode.JSON,
+    "huggingface": instructor.Mode.JSON,
+    "aimlapi": instructor.Mode.JSON,
+    "siliconflow": instructor.Mode.JSON,
+    "alibaba": instructor.Mode.JSON,
+    "github": instructor.Mode.JSON,
 }
 
 _PROVIDER_OUTPUT_CAPS: dict[str, int] = {
     "groq": 8192,
     "cerebras": 8192,
     "deepseek": 8192,
+    "sambanova": 8192,
+    "nvidia": 4096,
+    "huggingface": 8192,
+    "aimlapi": 8192,
+    "siliconflow": 8192,
+    "alibaba": 8192,
+    "github": 4096,
 }
 
 
 def _effective_max_tokens(provider: str, requested: int, task_type: str) -> int:
-    """Clamp max_tokens per provider limits (Groq 8192, Gemini higher for arch)."""
+    """Clamp max_tokens per provider limits. Arch tasks get higher ceilings on capable providers."""
     cap = _PROVIDER_OUTPUT_CAPS.get(provider, requested)
-    if provider == "gemini" and task_type.startswith("arch_"):
-        cap = max(cap, 24000)
+    if task_type.startswith("arch_"):
+        # Large-context providers can handle full arch doc output without truncation.
+        if provider == "gemini":
+            cap = max(cap, 24000)
+        elif provider in ("anthropic", "openai", "openrouter", "deepseek", "together",
+                          "siliconflow", "alibaba", "aimlapi"):
+            cap = max(cap, 16000)
     return min(requested, cap)
 
 
@@ -159,6 +193,14 @@ def _task_timeout_sec(task_type: str) -> float:
     return float(_DEFAULT_TASK_TIMEOUT_SEC)
 
 
+def _rate_limit_backoff_sec(retry_index: int) -> float:
+    """Exponential backoff capped at 30s (1s, 2s, 4s, …)."""
+    return min(
+        _RATE_LIMIT_BACKOFF_BASE_SEC * (2 ** max(retry_index - 1, 0)),
+        _RATE_LIMIT_BACKOFF_MAX_SEC,
+    )
+
+
 class AiRouter:
     """Route AI calls through tier chains, paid defaults, or screen overrides."""
 
@@ -174,6 +216,7 @@ class AiRouter:
         screen_override: tuple[str, str] | None = None,
         org_id: UUID | None = None,
         db: AsyncSession | None = None,
+        assistant_prefill: str = "",
     ) -> T:
         org = await self._resolve_org(org_id, db)
         tier = _resolve_effective_tier(org)
@@ -201,6 +244,7 @@ class AiRouter:
                 task_type,
                 org,
                 tier=tier,
+                assistant_prefill=assistant_prefill,
             )
 
         if tier in ("free", "low_cost"):
@@ -223,6 +267,7 @@ class AiRouter:
                 task_type,
                 org,
                 tier=tier,
+                assistant_prefill=assistant_prefill,
             )
 
         provider, model = DEFAULT_PAID_ROUTING.get(
@@ -239,6 +284,7 @@ class AiRouter:
             task_type,
             org,
             tier="premium",
+            assistant_prefill=assistant_prefill,
         )
 
     async def _resolve_org(
@@ -282,6 +328,13 @@ class AiRouter:
             "gemini": settings.gemini_api_key,
             "cerebras": settings.cerebras_api_key,
             "deepseek": settings.deepseek_api_key,
+            "sambanova": settings.sambanova_api_key,
+            "nvidia": settings.nvidia_api_key,
+            "huggingface": settings.huggingface_api_key,
+            "aimlapi": settings.aimlapi_api_key,
+            "siliconflow": settings.siliconflow_api_key,
+            "alibaba": settings.alibaba_api_key,
+            "github": settings.github_api_key,
         }
         return env_map.get(provider)
 
@@ -303,6 +356,7 @@ class AiRouter:
         task_type: str,
         org: Organization,
         tier: str,
+        assistant_prefill: str = "",
     ) -> T:
         models_in_chain: list[tuple[str, str]] = []
         for attempt_num in range(1, 16):
@@ -344,72 +398,101 @@ class AiRouter:
             api_key = self._get_api_key(provider, org) or ""
             effective_tokens = _effective_max_tokens(provider, max_tokens, task_type)
 
-            try:
-                call_coro = self._call_provider(
-                    provider=provider,
-                    model=model,
-                    api_key=api_key,
-                    prompt=prompt,
-                    response_model=response_model,
-                    system=system,
-                    context=context,
-                    max_tokens=effective_tokens,
-                    task_type=task_type,
-                )
-                result = await asyncio.wait_for(call_coro, timeout=timeout_sec)
-                await self._log_usage(
-                    task_type=task_type,
-                    provider=provider,
-                    model=model,
-                    org_id=org.id,
-                    tier=tier,
-                    attempt_number=attempt_num,
-                )
-                return result
-            except asyncio.TimeoutError:
-                last_error = f"Timeout after {timeout_sec}s: {provider}/{model}"
-                logger.warning(last_error, extra={"tier": tier, "attempt": attempt_num})
-                continue
-            except Exception as exc:
-                is_rate_limit = _is_rate_limit_error(exc)
-                last_error = (
-                    f"Rate limit: {provider}/{model}"
-                    if is_rate_limit
-                    else str(exc)[:200]
-                )
-                if is_rate_limit:
-                    if _is_daily_quota_error(exc):
-                        await _set_cooling(
+            publish_job_progress(
+                current_model=model_display_name(model),
+                current_provider=provider,
+                phase="generating",
+                message=f"Using {model_display_name(model)}…",
+                attempt=attempt_num,
+            )
+
+            model_rate_retries = 0
+            while model_rate_retries <= _SAME_MODEL_RATE_LIMIT_RETRIES:
+                try:
+                    call_coro = self._call_provider(
+                        provider=provider,
+                        model=model,
+                        api_key=api_key,
+                        prompt=prompt,
+                        response_model=response_model,
+                        system=system,
+                        context=context,
+                        max_tokens=effective_tokens,
+                        task_type=task_type,
+                        assistant_prefill=assistant_prefill,
+                    )
+                    result = await asyncio.wait_for(call_coro, timeout=timeout_sec)
+                    await self._log_usage(
+                        task_type=task_type,
+                        provider=provider,
+                        model=model,
+                        org_id=org.id,
+                        tier=tier,
+                        attempt_number=attempt_num,
+                    )
+                    return result
+                except asyncio.TimeoutError:
+                    last_error = f"Timeout after {timeout_sec}s: {provider}/{model}"
+                    logger.warning(last_error, extra={"tier": tier, "attempt": attempt_num})
+                    break
+                except Exception as exc:
+                    is_rate_limit = _is_rate_limit_error(exc)
+                    last_error = (
+                        f"Rate limit: {provider}/{model}"
+                        if is_rate_limit
+                        else str(exc)[:200]
+                    )
+                    if is_rate_limit:
+                        if model_rate_retries < _SAME_MODEL_RATE_LIMIT_RETRIES:
+                            backoff = _rate_limit_backoff_sec(model_rate_retries + 1)
+                            logger.warning(
+                                "Rate limited on %s/%s — retrying same model in %.1fs",
+                                provider,
+                                model,
+                                backoff,
+                                extra={"tier": tier},
+                            )
+                            await asyncio.sleep(backoff)
+                            model_rate_retries += 1
+                            continue
+                        if _is_daily_quota_error(exc):
+                            await _set_cooling(
+                                provider,
+                                model,
+                                _COOLDOWN_DAILY_QUOTA_SEC,
+                                "provider",
+                            )
+                        else:
+                            await _set_cooling(
+                                provider,
+                                model,
+                                _COOLDOWN_RATE_LIMIT_SEC,
+                                "model",
+                            )
+                        logger.warning(
+                            "Rate limited on %s/%s — switching model",
                             provider,
                             model,
-                            _COOLDOWN_DAILY_QUOTA_SEC,
-                            "provider",
+                            extra={"tier": tier},
                         )
+                        publish_job_progress(
+                            phase="rate_limited",
+                            message=f"Rate limit on {model_display_name(model)} — switching model…",
+                            current_model=model_display_name(model),
+                            attempt=attempt_num,
+                        )
+                        await asyncio.sleep(_rate_limit_backoff_sec(attempt_num))
                     else:
-                        await _set_cooling(
-                            provider,
-                            model,
-                            _COOLDOWN_RATE_LIMIT_SEC,
-                            "model",
+                        logger.exception(
+                            "Model failed, trying next",
+                            extra={
+                                "provider": provider,
+                                "model": model,
+                                "tier": tier,
+                                "attempt": attempt_num,
+                            },
                         )
-                    logger.warning(
-                        "Rate limited on %s/%s — switching model",
-                        provider,
-                        model,
-                        extra={"tier": tier},
-                    )
-                    await asyncio.sleep(1)
-                else:
-                    logger.exception(
-                        "Model failed, trying next",
-                        extra={
-                            "provider": provider,
-                            "model": model,
-                            "tier": tier,
-                            "attempt": attempt_num,
-                        },
-                    )
-                continue
+                    break
 
         raise RuntimeError(
             f"All models failed for {task_type}, tier={tier}. "
@@ -429,6 +512,7 @@ class AiRouter:
         task_type: str,
         org: Organization,
         tier: str,
+        assistant_prefill: str = "",
     ) -> T:
         api_key = self._get_api_key(provider, org)
         if not api_key:
@@ -452,6 +536,7 @@ class AiRouter:
             context=context,
             max_tokens=effective_tokens,
             task_type=task_type,
+            assistant_prefill=assistant_prefill,
         )
         await self._log_usage(
             task_type=task_type,
@@ -474,9 +559,12 @@ class AiRouter:
         context: str,
         max_tokens: int,
         task_type: str = "req_analyze",
+        assistant_prefill: str = "",
     ) -> T:
         system_msg = system or "You are a professional software engineering assistant."
-        messages = _build_openai_messages(prompt, context, system_msg)
+        messages = _build_openai_messages(
+            prompt, context, system_msg, assistant_prefill=assistant_prefill
+        )
 
         max_retries = (
             _ARCH_MAX_RETRIES
@@ -490,7 +578,9 @@ class AiRouter:
                 model=model,
                 max_tokens=max_tokens,
                 system=system_msg,
-                messages=_build_anthropic_messages(prompt, context),
+                messages=_build_anthropic_messages(
+                    prompt, context, assistant_prefill=assistant_prefill
+                ),
                 response_model=response_model,
                 max_retries=max_retries,
             )
@@ -588,12 +678,19 @@ class AiRouter:
         }
 
 
-def _build_anthropic_messages(prompt: str, context: str) -> list[dict[str, str]]:
+def _build_anthropic_messages(
+    prompt: str,
+    context: str,
+    assistant_prefill: str = "",
+) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     if context:
         messages.append({"role": "user", "content": f"Context:\n{context}"})
         messages.append({"role": "assistant", "content": "Understood."})
     messages.append({"role": "user", "content": prompt})
+    if assistant_prefill.strip():
+        messages.append({"role": "assistant", "content": assistant_prefill.strip()})
+        messages.append({"role": "user", "content": _CONTINUE_INSTRUCTION})
     return messages
 
 
@@ -601,6 +698,7 @@ def _build_openai_messages(
     prompt: str,
     context: str,
     system_msg: str,
+    assistant_prefill: str = "",
 ) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     if system_msg:
@@ -609,6 +707,9 @@ def _build_openai_messages(
         messages.append({"role": "user", "content": f"Context:\n{context}"})
         messages.append({"role": "assistant", "content": "Understood."})
     messages.append({"role": "user", "content": prompt})
+    if assistant_prefill.strip():
+        messages.append({"role": "assistant", "content": assistant_prefill.strip()})
+        messages.append({"role": "user", "content": _CONTINUE_INSTRUCTION})
     return messages
 
 

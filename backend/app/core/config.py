@@ -83,6 +83,34 @@ class Settings(BaseSettings):
         default=None,
         description="DeepSeek API key — low-cost V3 model ~$0.14/1M tokens (optional).",
     )
+    sambanova_api_key: str | None = Field(
+        default=None,
+        description="SambaNova API key — free Llama 3.3 70B, 20-480 RPM (optional).",
+    )
+    nvidia_api_key: str | None = Field(
+        default=None,
+        description="NVIDIA NIM API key — free Llama 405B, 1K calls/month (optional).",
+    )
+    huggingface_api_key: str | None = Field(
+        default=None,
+        description="Hugging Face token — free inference via HF router (optional).",
+    )
+    aimlapi_api_key: str | None = Field(
+        default=None,
+        description="AIML API key — 500+ models pay-as-you-go (optional).",
+    )
+    siliconflow_api_key: str | None = Field(
+        default=None,
+        description="SiliconFlow API key — generous free tier (optional).",
+    )
+    alibaba_api_key: str | None = Field(
+        default=None,
+        description="Alibaba DashScope API key — Qwen models free trial (optional).",
+    )
+    github_api_key: str | None = Field(
+        default=None,
+        description="GitHub Models token — 150 RPD free open weights (optional).",
+    )
     environment: str = Field(
         default="development",
         description="Runtime environment name (e.g. development, staging, production).",

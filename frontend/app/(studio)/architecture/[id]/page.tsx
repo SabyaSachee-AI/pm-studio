@@ -15,7 +15,7 @@ import {
   ArchModelSelector,
   modelLabelFromProgress,
 } from "@/components/ui/ArchModelSelector";
-import { AiStatusBar } from "@/components/ui/AiStatusBar";
+import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
 import { Button } from "@/components/ui/button";
 import { Toast } from "@/components/ui/Toast";
 import { exportArchitecturePdf } from "@/lib/architecturePdfExport";
@@ -442,12 +442,8 @@ export default function ArchitectureDetailPage() {
               })}
             </ul>
             <AiStatusBar
-              isVisible={aiJob.isVisible}
-              status={aiJob.status}
+              {...aiJobStatusBarProps(aiJob)}
               operationName={aiJob.operationName || "Generating architecture"}
-              elapsedSeconds={aiJob.elapsedSeconds}
-              tokenCount={aiJob.tokenCount}
-              errorMessage={aiJob.errorMessage}
               processingMessage={liveMessage}
               onCancel={aiJob.cancel}
             />

@@ -22,7 +22,7 @@ import {
   WidthType,
 } from "docx";
 import { saveAs } from "file-saver";
-import { AiStatusBar } from "@/components/ui/AiStatusBar";
+import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
 import { Button } from "@/components/ui/button";
 import { GeneratedDocActions } from "@/components/ui/GeneratedDocActions";
 import { ModelSelect } from "@/components/ui/ModelSelect";
@@ -877,13 +877,7 @@ export default function RequirementDetailPage() {
                 {aiJob.operationName || "Processing requirement..."}
               </p>
               <AiStatusBar
-                isVisible={aiJob.isVisible}
-                status={aiJob.status}
-                operationName={aiJob.operationName}
-                elapsedSeconds={aiJob.elapsedSeconds}
-                tokenCount={aiJob.tokenCount}
-                errorMessage={aiJob.errorMessage}
-                processingMessage={aiJob.processingMessage}
+                {...aiJobStatusBarProps(aiJob)}
                 onCancel={aiJob.cancel}
                 onTryAgain={() => {
                   if (aiJob.operationName === "Rewriting requirement analysis") {
@@ -968,13 +962,7 @@ export default function RequirementDetailPage() {
                   </Button>
                   {aiJob.operationName === "Rewriting requirement analysis" ? (
                     <AiStatusBar
-                      isVisible={aiJob.isVisible}
-                      status={aiJob.status}
-                      operationName={aiJob.operationName}
-                      elapsedSeconds={aiJob.elapsedSeconds}
-                      tokenCount={aiJob.tokenCount}
-                      errorMessage={aiJob.errorMessage}
-                      processingMessage={aiJob.processingMessage}
+                      {...aiJobStatusBarProps(aiJob)}
                       onCancel={aiJob.cancel}
                       onTryAgain={() =>
                         void runReanalyze(req.id, pmComment.trim())
@@ -1164,13 +1152,7 @@ export default function RequirementDetailPage() {
                       </label>
                       {aiJob.operationName === "Synthesizing feedback" ? (
                         <AiStatusBar
-                          isVisible={aiJob.isVisible}
-                          status={aiJob.status}
-                          operationName={aiJob.operationName}
-                          elapsedSeconds={aiJob.elapsedSeconds}
-                          tokenCount={aiJob.tokenCount}
-                          errorMessage={aiJob.errorMessage}
-                          processingMessage={aiJob.processingMessage}
+                          {...aiJobStatusBarProps(aiJob)}
                           onCancel={aiJob.cancel}
                           onTryAgain={() => void runSynthesize(id)}
                         />

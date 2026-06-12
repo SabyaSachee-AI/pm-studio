@@ -13,8 +13,19 @@ from app.models.prd import PRD
 from app.models.project import Project
 from app.models.srs import SRS, SRSStatus
 from app.models.task import Task, TaskPriority, TaskStatus, TaskType
-from app.models.task_spec import TaskSpec
+from app.models.task_spec import TaskSpec, TaskSpecStatus
 from app.services.ai.modules import generate_modules_ai
+from app.services.ai.job_progress import publish_job_progress
+from app.services.task.system_prompts import (
+    CODE_AUDIT_ORDER,
+    DEPLOY_ORDER,
+    LOCAL_UI_TEST_ORDER,
+    PROJECT_BIBLE_ORDER,
+    SYSTEM_TASK_ORDERS,
+    build_code_audit_prompt,
+    build_deploy_prompt,
+    build_local_ui_test_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +46,92 @@ def _build_arch_content(arch: Architecture) -> dict[str, Any]:
         "doc_security": arch.doc_security or {},
         "doc_uiux": arch.doc_uiux or {},
     }
+
+
+def _ensure_system_tasks(
+    db: Any,
+    project_id: UUID,
+    srs_id: UUID,
+    project_name: str,
+    prd_content: dict[str, Any],
+    srs_content: dict[str, Any],
+    arch_content: dict[str, Any] | None,
+    task_titles: list[str],
+) -> list[str]:
+    """Create the pinned system tasks if missing. Returns created task ids."""
+    existing_orders = {
+        t.order_index
+        for t in db.query(Task)
+        .filter(
+            Task.project_id == project_id,
+            Task.order_index.in_(list(SYSTEM_TASK_ORDERS)),
+            Task.deleted_at.is_(None),
+        )
+        .all()
+    }
+
+    definitions: list[dict[str, Any]] = [
+        {
+            "order_index": PROJECT_BIBLE_ORDER,
+            "title": "Project bible — create .cursorrules file",
+            "priority": TaskPriority.critical,
+            "module_name": "⚙ SETUP — complete before all other tasks",
+            "cursor_prompt": None,
+        },
+        {
+            "order_index": CODE_AUDIT_ORDER,
+            "title": "Code audit — coverage check, gap detection and test writing",
+            "priority": TaskPriority.critical,
+            "module_name": "✅ FINAL STEP 1 — run after all features are coded",
+            "cursor_prompt": build_code_audit_prompt(
+                project_name, srs_content, arch_content, task_titles
+            ),
+        },
+        {
+            "order_index": LOCAL_UI_TEST_ORDER,
+            "title": "Local UI test — run the application and verify every feature",
+            "priority": TaskPriority.critical,
+            "module_name": "✅ FINAL STEP 2 — run after code audit passes",
+            "cursor_prompt": build_local_ui_test_prompt(
+                project_name, prd_content, srs_content, arch_content
+            ),
+        },
+        {
+            "order_index": DEPLOY_ORDER,
+            "title": "Git push and deploy — GitHub, CI/CD pipeline and VPS",
+            "priority": TaskPriority.high,
+            "module_name": "🚀 DEPLOY — after local test passes",
+            "cursor_prompt": build_deploy_prompt(project_name),
+        },
+    ]
+
+    created_ids: list[str] = []
+    for definition in definitions:
+        if definition["order_index"] in existing_orders:
+            continue
+        task = Task(
+            project_id=project_id,
+            srs_id=srs_id,
+            title=definition["title"],
+            task_type=TaskType.devops,
+            priority=definition["priority"],
+            status=TaskStatus.backlog,
+            module_name=definition["module_name"],
+            order_index=definition["order_index"],
+        )
+        db.add(task)
+        db.flush()
+        if definition["cursor_prompt"] is not None:
+            db.add(
+                TaskSpec(
+                    task_id=task.id,
+                    content_json={"cursor_prompt": definition["cursor_prompt"]},
+                    status=TaskSpecStatus.ready,
+                )
+            )
+        created_ids.append(str(task.id))
+    db.commit()
+    return created_ids
 
 
 def _covered_frs(tasks: list[Task]) -> set[str]:
@@ -63,6 +160,11 @@ def extract_modules_task(
     """
     db = SyncSessionLocal()
     try:
+        publish_job_progress(
+            phase="starting",
+            message="Extracting modules from SRS + architecture…",
+            current_model="Auto model chain",
+        )
         srs = db.query(SRS).filter(SRS.id == UUID(srs_id)).first()
         if not srs or not srs.content_json:
             return {"error": "SRS not found or has no content"}
@@ -161,8 +263,12 @@ def extract_modules_task(
         finally:
             loop.close()
 
-        # Determine starting order index
-        max_order = max((t.order_index for t in existing_tasks), default=-1) + 1
+        # Determine starting order index (system tasks excluded so their
+        # pinned order_index values never shift regular task ordering)
+        regular_existing = [
+            t for t in existing_tasks if t.order_index not in SYSTEM_TASK_ORDERS
+        ]
+        max_order = max((t.order_index for t in regular_existing), default=-1) + 1
 
         created_ids: list[str] = []
         order = max_order
@@ -199,6 +305,21 @@ def extract_modules_task(
             .filter(Task.project_id == UUID(project_id), Task.deleted_at.is_(None))
             .all()
         )
+
+        # Pin the system tasks (project bible, code audit, local UI test, deploy)
+        regular_titles = [
+            t.title for t in all_tasks_after if t.order_index not in SYSTEM_TASK_ORDERS
+        ]
+        system_task_ids = _ensure_system_tasks(
+            db,
+            UUID(project_id),
+            UUID(srs_id),
+            project_name,
+            prd_content,
+            srs.content_json or {},
+            arch_content,
+            regular_titles,
+        )
         covered_after = _covered_frs(all_tasks_after)
         missing_frs = [f for f in all_frs if f not in covered_after]
 
@@ -208,6 +329,7 @@ def extract_modules_task(
             "modules_count": len(result.modules),
             "tasks_created": len(created_ids),
             "task_ids": created_ids,
+            "system_tasks_created": len(system_task_ids),
             "fr_coverage": {
                 "total": len(all_frs),
                 "covered": len(covered_after),

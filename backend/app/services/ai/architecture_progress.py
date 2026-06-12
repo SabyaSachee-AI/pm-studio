@@ -18,6 +18,13 @@ _PROVIDER_ICONS: dict[str, str] = {
     "cerebras": "🔶",
     "deepseek": "🌊",
     "together": "🤝",
+    "sambanova": "🔴",
+    "nvidia": "🟩",
+    "huggingface": "🤗",
+    "aimlapi": "🌐",
+    "siliconflow": "💎",
+    "alibaba": "☁️",
+    "github": "🐙",
 }
 
 logger = logging.getLogger(__name__)

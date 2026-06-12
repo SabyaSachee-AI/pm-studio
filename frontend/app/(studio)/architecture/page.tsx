@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Layers } from "lucide-react";
 import { ArchModelSelector } from "@/components/ui/ArchModelSelector";
-import { AiStatusBar } from "@/components/ui/AiStatusBar";
+import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
 import { Button } from "@/components/ui/button";
 import { Toast } from "@/components/ui/Toast";
 import {
@@ -298,15 +298,7 @@ export default function ArchitectureListPage() {
             </span>
             {aiJob.isVisible ? (
               <AiStatusBar
-                isVisible={aiJob.isVisible}
-                status={aiJob.status}
-                operationName={aiJob.operationName}
-                elapsedSeconds={aiJob.elapsedSeconds}
-                tokenCount={aiJob.tokenCount}
-                errorMessage={aiJob.errorMessage}
-                processingMessage={
-                  aiJob.taskMeta?.message ?? aiJob.processingMessage
-                }
+                {...aiJobStatusBarProps(aiJob)}
                 onCancel={aiJob.cancel}
                 onTryAgain={() => void handleGenerate()}
               />

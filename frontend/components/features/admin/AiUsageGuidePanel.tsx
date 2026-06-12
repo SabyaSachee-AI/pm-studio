@@ -127,7 +127,7 @@ function FlowDiagram() {
     { icon: "📑", label: "SRS", sub: "srs_generate" },
     { icon: "🏗️", label: "Architecture ×6", sub: "arch_generate" },
     { icon: "✅", label: "Tasks + specs", sub: "module + spec" },
-    { icon: "🎯", label: "Orchestration", sub: "master prompt" },
+    { icon: "🎯", label: "Orchestration", sub: "master build guide" },
   ];
 
   return (

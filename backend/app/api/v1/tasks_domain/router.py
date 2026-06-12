@@ -20,9 +20,11 @@ from app.schemas.task import (
     TaskUpdate,
 )
 from app.models.architecture import Architecture, ArchitectureStatus
+from app.models.project import Project
 from app.models.srs import SRS, SRSStatus
 from app.workers.module_tasks import extract_modules_task
 from app.workers.orchestration_tasks import generate_orchestration_task
+from app.services.task.bible_builder import build_project_bible
 from app.services.task.service import (
     create_task,
     delete_task,
@@ -114,6 +116,62 @@ async def extract_modules(
     if arch_warning:
         response["warning"] = arch_warning
     return response
+
+
+@router.get("/project-bible/{project_id}")
+async def get_project_bible(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, str]:
+    """Assemble the .cursorrules project bible from Architecture + SRS + Project data."""
+    arch_result = await db.execute(
+        select(Architecture)
+        .where(
+            Architecture.project_id == project_id,
+            Architecture.status == ArchitectureStatus.finalized,
+            Architecture.deleted_at.is_(None),
+        )
+        .order_by(Architecture.created_at.desc())
+    )
+    arch = arch_result.scalars().first()
+    if arch is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No finalized architecture found for this project",
+        )
+
+    srs_result = await db.execute(
+        select(SRS)
+        .where(SRS.project_id == project_id, SRS.deleted_at.is_(None))
+        .order_by(SRS.created_at.desc())
+    )
+    srs_candidates = srs_result.scalars().all()
+    srs = None
+    for candidate in srs_candidates:
+        meta = (candidate.content_json or {}).get("_meta") or {}
+        if (
+            candidate.status == SRSStatus.approved
+            or meta.get("workflow_finalized")
+            or meta.get("workflow_confirmed")
+        ):
+            srs = candidate
+            break
+    if srs is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No approved SRS found for this project",
+        )
+
+    project_result = await db.execute(
+        select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
+    )
+    project = project_result.scalar_one_or_none()
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    content = build_project_bible(project, srs, arch)
+    return {"content": content, "project_name": project.name}
 
 
 @router.get("/coverage/{project_id}")

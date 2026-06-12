@@ -25,6 +25,7 @@ async def ai_call(
     screen: str | None = None,
     org_id: UUID | None = None,
     db: AsyncSession | None = None,
+    assistant_prefill: str = "",
 ) -> T:
     """
     ALL AI calls go through this function.
@@ -41,4 +42,5 @@ async def ai_call(
         screen=screen,
         org_id=org_id,
         db=db,
+        assistant_prefill=assistant_prefill,
     )

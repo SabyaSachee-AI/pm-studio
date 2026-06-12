@@ -10,7 +10,7 @@ import {
 } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { AiStatusBar } from "@/components/ui/AiStatusBar";
+import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
 import { Button } from "@/components/ui/button";
 import { GeneratedDocActions } from "@/components/ui/GeneratedDocActions";
 import { ModelSelect } from "@/components/ui/ModelSelect";
@@ -860,13 +860,7 @@ export default function PrdDetailPage() {
                 {aiJob.isRunning ? "⏳ Generating..." : "🔵 Generate PRD"}
               </Button>
               <AiStatusBar
-                isVisible={aiJob.isVisible}
-                status={aiJob.status}
-                operationName={aiJob.operationName}
-                elapsedSeconds={aiJob.elapsedSeconds}
-                tokenCount={aiJob.tokenCount}
-                errorMessage={aiJob.errorMessage}
-                processingMessage={aiJob.processingMessage}
+                {...aiJobStatusBarProps(aiJob)}
                 onCancel={aiJob.cancel}
                 onTryAgain={() => {
                   const taskId = taskFromUrl ?? prd.generation_task_id;
@@ -955,13 +949,7 @@ export default function PrdDetailPage() {
                   </Button>
                   {aiJob.operationName === "PRD quality check" ? (
                     <AiStatusBar
-                      isVisible={aiJob.isVisible}
-                      status={aiJob.status}
-                      operationName={aiJob.operationName}
-                      elapsedSeconds={aiJob.elapsedSeconds}
-                      tokenCount={aiJob.tokenCount}
-                      errorMessage={aiJob.errorMessage}
-                      processingMessage={aiJob.processingMessage}
+                      {...aiJobStatusBarProps(aiJob)}
                       onCancel={aiJob.cancel}
                       onTryAgain={() => void runQualityCheck()}
                     />
@@ -988,13 +976,7 @@ export default function PrdDetailPage() {
                   </Button>
                   {aiJob.operationName === "Rewriting PRD" ? (
                     <AiStatusBar
-                      isVisible={aiJob.isVisible}
-                      status={aiJob.status}
-                      operationName={aiJob.operationName}
-                      elapsedSeconds={aiJob.elapsedSeconds}
-                      tokenCount={aiJob.tokenCount}
-                      errorMessage={aiJob.errorMessage}
-                      processingMessage={aiJob.processingMessage}
+                      {...aiJobStatusBarProps(aiJob)}
                       onCancel={aiJob.cancel}
                       onTryAgain={() => void runRewrite()}
                     />
@@ -1076,13 +1058,7 @@ export default function PrdDetailPage() {
                   </Button>
                   {aiJob.operationName === "Exporting PDF" ? (
                     <AiStatusBar
-                      isVisible={aiJob.isVisible}
-                      status={aiJob.status}
-                      operationName={aiJob.operationName}
-                      elapsedSeconds={aiJob.elapsedSeconds}
-                      tokenCount={aiJob.tokenCount}
-                      errorMessage={aiJob.errorMessage}
-                      processingMessage={aiJob.processingMessage}
+                      {...aiJobStatusBarProps(aiJob)}
                       onTryAgain={() => void handleExportPdf()}
                     />
                   ) : null}

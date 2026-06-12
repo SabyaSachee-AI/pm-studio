@@ -53,8 +53,9 @@ export interface AiModelOption {
   label: string;
   tier: string;
   cost: string;
+  context?: string;
   group: "premium" | "low_cost" | "free" | string;
-  available: boolean;
+  available?: boolean;
 }
 
 export interface AiModelCatalog {
@@ -193,8 +194,14 @@ export interface KanbanTask {
   assigned_to_id: string | null;
   effort_hours: number | null;
   fr_references: string[] | null;
+  linked_fr: string | null;
   module_name: string | null;
   order_index: number;
+  suggested_file: string | null;
+  suggested_endpoint: string | null;
+  suggested_table: string | null;
+  spec_id: string | null;
+  spec_status: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -261,6 +268,29 @@ export interface AiProviderStatus {
   configured: boolean;
   is_enabled: boolean;
   masked_key: string | null;
+  label?: string;
+  signup_url?: string | null;
+  note?: string | null;
+  default_tier?: string;
+}
+
+export interface ModelCatalogEntry {
+  provider: string;
+  model: string;
+  label: string;
+  tier: string;
+  cost: string;
+  context: string;
+  note: string;
+  task_types: string[];
+  in_routing: boolean;
+  available: boolean;
+}
+
+export interface TierModelCatalog {
+  free: ModelCatalogEntry[];
+  low_cost: ModelCatalogEntry[];
+  premium: ModelCatalogEntry[];
 }
 
 export interface AiRoutingRow {
@@ -305,6 +335,8 @@ export interface AiConfigResponse {
   free_model_options: AiModelOption[];
   low_cost_model_options: AiModelOption[];
   daily_usage: Record<string, ProviderUsage>;
+  model_catalog: TierModelCatalog;
+  configured_model_catalog: TierModelCatalog;
 }
 
 export class ApiClient {
@@ -384,8 +416,13 @@ export class ApiClient {
       const text = await response.text();
       let message = `Request failed (${response.status})`;
       try {
-        const body = JSON.parse(text) as { detail?: string };
-        if (body.detail) message = body.detail;
+        const body = JSON.parse(text) as { detail?: string | unknown };
+        if (body.detail) {
+          message =
+            typeof body.detail === "string"
+              ? body.detail
+              : JSON.stringify(body.detail);
+        }
       } catch {
         if (text) message = text;
       }
@@ -797,11 +834,28 @@ export class ApiClient {
       body: JSON.stringify({ status, note }),
     });
   }
+  async updateTask(
+    taskId: string,
+    body: {
+      title?: string;
+      description?: string | null;
+      priority?: string;
+      module_name?: string | null;
+    },
+  ): Promise<KanbanTask> {
+    return this.request<KanbanTask>(`/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
   async extractModules(projectId: string, srsId: string) {
     return this.request<{ task_id: string; status: string }>("/tasks/extract-modules", {
       method: "POST",
       body: JSON.stringify({ project_id: projectId, srs_id: srsId }),
     });
+  }
+  async getProjectBible(projectId: string): Promise<{ content: string; project_name: string }> {
+    return this.request(`/tasks/project-bible/${projectId}`);
   }
 
   // Specs
@@ -843,8 +897,22 @@ export class ApiClient {
       status: string;
     }>(`/specs/${specId}/regenerate${this.modelQS(model)}`, { method: "POST" });
   }
+  async regenerateSpecByTask(taskId: string, model?: ModelChoice | null) {
+    return this.request<{
+      spec_id: string;
+      task_id: string;
+      task_id_celery: string;
+      status: string;
+    }>(`/specs/regenerate${this.modelQS(model)}`, {
+      method: "POST",
+      body: JSON.stringify({ task_id: taskId }),
+    });
+  }
   async deleteTask(taskId: string): Promise<void> {
     return this.request(`/tasks/${taskId}`, { method: "DELETE" });
+  }
+  async clearProjectTasks(projectId: string): Promise<{ deleted_tasks: number; deleted_specs: number }> {
+    return this.request(`/tasks/clear/${projectId}`, { method: "DELETE" });
   }
 
   // Knowledge base

@@ -2,8 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
 import { Button } from "@/components/ui/button";
 import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
+import {
+  aiButtonClassName,
+  aiButtonLabel,
+  useAiJob,
+} from "@/lib/hooks/useAiJob";
 import { api, type PRD, type Project, type SRS } from "@/lib/api";
 
 export default function SrsPage() {
@@ -12,7 +18,18 @@ export default function SrsPage() {
   const [prds, setPrds] = useState<PRD[]>([]);
   const [srsList, setSrsList] = useState<SRS[]>([]);
   const [prdId, setPrdId] = useState("");
-  const [status, setStatus] = useState("");
+
+  const aiJob = useAiJob({
+    onComplete: () => {
+      if (projectId) void api.listSrs(projectId).then(setSrsList);
+    },
+  });
+
+  const generateBtn = aiButtonLabel(
+    "Generate SRS",
+    aiJob.status,
+    aiJob.operationName === "Generating SRS",
+  );
 
   useEffect(() => {
     api.listProjects().then((p) => {
@@ -36,11 +53,7 @@ export default function SrsPage() {
     const { task_id } = (await api.generateSrs(projectId, prdId)) as {
       task_id: string;
     };
-    setStatus("Generating...");
-    api.subscribeTask(task_id, (data) => {
-      setStatus(data.status);
-      if (data.status === "SUCCESS") api.listSrs(projectId).then(setSrsList);
-    });
+    aiJob.startJob(task_id, "Generating SRS");
   }
 
   return (
@@ -72,9 +85,21 @@ export default function SrsPage() {
             </option>
           ))}
         </select>
-        <Button onClick={handleGenerate}>Generate SRS</Button>
-        {status && <span className="text-sm text-gray-400">{status}</span>}
+        <Button
+          onClick={() => void handleGenerate()}
+          disabled={generateBtn.disabled || aiJob.isRunning}
+          className={aiButtonClassName(generateBtn.variant)}
+        >
+          {generateBtn.label}
+        </Button>
       </div>
+      {aiJob.isVisible ? (
+        <AiStatusBar
+          {...aiJobStatusBarProps(aiJob)}
+          onCancel={aiJob.cancel}
+          onTryAgain={() => void handleGenerate()}
+        />
+      ) : null}
       <div className="rounded-xl border border-gray-800">
         {srsList.map((s) => (
           <Link

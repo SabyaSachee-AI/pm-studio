@@ -74,6 +74,58 @@ PROVIDER_DAILY_LIMITS: dict[str, dict[str, int | str]] = {
         "tier": "paid",
         "color": "indigo",
     },
+    "sambanova": {
+        "requests_per_day": 0,           # RPM-limited (20-480), no daily cap
+        "tokens_per_day": 0,
+        "rpm": 20,
+        "label": "SambaNova",
+        "tier": "free",
+        "color": "red",
+    },
+    "nvidia": {
+        "requests_per_day": 33,
+        "tokens_per_day": 0,
+        "rpm": 40,
+        "label": "NVIDIA NIM",
+        "tier": "free",
+        "color": "emerald",
+    },
+    "huggingface": {
+        "requests_per_day": 0,
+        "tokens_per_day": 0,
+        "label": "Hugging Face",
+        "tier": "free",
+        "color": "yellow",
+    },
+    "aimlapi": {
+        "requests_per_day": 0,
+        "tokens_per_day": 0,
+        "label": "AIML API",
+        "tier": "low_cost",
+        "color": "violet",
+    },
+    "siliconflow": {
+        "requests_per_day": 10000,
+        "tokens_per_day": 0,
+        "label": "SiliconFlow",
+        "tier": "free",
+        "color": "teal",
+    },
+    "alibaba": {
+        "requests_per_day": 0,
+        "tokens_per_day": 0,
+        "label": "Alibaba DashScope",
+        "tier": "free",
+        "color": "orange",
+    },
+    "github": {
+        "requests_per_day": 150,
+        "tokens_per_day": 0,
+        "rpm": 15,
+        "label": "GitHub Models",
+        "tier": "free",
+        "color": "gray",
+    },
 }
 
 

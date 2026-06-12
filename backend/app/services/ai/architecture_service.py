@@ -62,25 +62,21 @@ COMPLETED_STATUSES = frozenset({"completed", "generated"})
 
 
 def _srs_summary(srs_content: dict[str, Any]) -> str:
-    frs = srs_content.get("functional_requirements", [])
-    nfrs = srs_content.get("non_functional_requirements", [])
-    data_req = srs_content.get("data_requirements", {})
-    interfaces = srs_content.get("system_interfaces", {})
-    security = srs_content.get("security_requirements", [])
-
+    # All arch models in HEAVY_FREE_TAIL have ≥128K context — no truncation needed.
+    # Compact JSON (no indent) keeps tokens low without losing any FR/NFR coverage.
     return json.dumps(
         {
-            "functional_requirements": frs[:20],
-            "non_functional_requirements": nfrs[:12],
-            "data_requirements": data_req,
-            "system_interfaces": interfaces,
-            "security_requirements": security,
+            "functional_requirements": srs_content.get("functional_requirements", []),
+            "non_functional_requirements": srs_content.get("non_functional_requirements", []),
+            "data_requirements": srs_content.get("data_requirements", {}),
+            "system_interfaces": srs_content.get("system_interfaces", {}),
+            "security_requirements": srs_content.get("security_requirements", []),
             "introduction": srs_content.get("introduction", {}),
             "overall_description": srs_content.get("overall_description", {}),
         },
-        indent=2,
+        separators=(",", ":"),
         default=str,
-    )[:12000]
+    )
 
 
 def _doc_prompt(
@@ -176,7 +172,21 @@ async def generate_single_document(
     if cross_doc_context:
         prompt += f"\n\nPRIOR DOCUMENTS:\n{cross_doc_context}"
     if prd_content:
-        prompt += f"\n\nPRD CONTEXT:\n{json.dumps(prd_content)[:4000]}"
+        # Selective extraction — all features by title+priority, no char barrier.
+        prd_brief = {
+            "executive_summary": (prd_content.get("executive_summary") or "")[:600],
+            "features": [
+                {
+                    "title": f.get("title", ""),
+                    "description": (f.get("description") or "")[:120],
+                    "priority": f.get("priority", ""),
+                }
+                for f in (prd_content.get("features") or [])
+            ],
+            "out_of_scope": prd_content.get("out_of_scope") or [],
+            "success_metrics": prd_content.get("success_metrics") or [],
+        }
+        prompt += f"\n\nPRD CONTEXT:\n{json.dumps(prd_brief, separators=(',', ':'), default=str)}"
     if existing_doc:
         prompt += f"\n\nEXISTING DOCUMENT (revise):\n{json.dumps(existing_doc)[:8000]}"
     if instructions.strip():
@@ -189,7 +199,7 @@ async def generate_single_document(
         prompt=prompt,
         response_model=schema,
         system=system,
-        max_tokens=8000,
+        max_tokens=16000,  # router clamps per provider (Gemini 24K, Groq 8K, etc.)
         task_type=task_type,
         screen="architecture",
     )
@@ -244,15 +254,135 @@ async def generate_api_document_chunked(
     cross_doc_context: str = "",
     task_type: str = "arch_generate",
 ) -> dict[str, Any]:
-    """Generate API doc (chunked path falls back to single-shot for now)."""
-    return await generate_single_document(
-        "doc_api",
-        srs_content,
-        project_info,
-        task_type=task_type,
-        suite_canon=suite_canon,
-        cross_doc_context=cross_doc_context,
+    """Generate API doc in chunks — shell first, then endpoint groups by FR batch."""
+    srs_summary = _srs_summary(srs_content)
+    project_name = project_info.get("name", "Project")
+    project_type = project_info.get("type", "Web App")
+
+    progress = dict(arch.generation_progress or {})
+    chunk_state: dict[str, Any] = dict(progress.get("api_chunk_state") or {})
+
+    def _fr_groups() -> list[list[dict[str, Any]]]:
+        frs = [
+            fr
+            for fr in srs_content.get("functional_requirements", [])
+            if isinstance(fr, dict)
+        ]
+        if not frs:
+            return [[]]
+        chunk_size = 5
+        return [frs[i : i + chunk_size] for i in range(0, len(frs), chunk_size)]
+
+    if not chunk_state.get("fr_groups"):
+        chunk_state["fr_groups"] = _fr_groups()
+        chunk_state["total_chunks"] = len(chunk_state["fr_groups"])
+        chunk_state["completed_chunks"] = []
+        chunk_state["endpoints"] = []
+
+    fr_groups: list[list[dict[str, Any]]] = chunk_state["fr_groups"]
+    completed_chunks: set[int] = set(chunk_state.get("completed_chunks") or [])
+    merged_endpoints: list[dict[str, Any]] = list(chunk_state.get("endpoints") or [])
+    shell_data: dict[str, Any] = dict(chunk_state.get("shell") or {})
+
+    def persist_chunk_state(*, message: str) -> None:
+        chunk_state["completed_chunks"] = sorted(completed_chunks)
+        chunk_state["endpoints"] = merged_endpoints
+        if shell_data:
+            chunk_state["shell"] = shell_data
+            chunk_state["shell_completed"] = True
+        progress.update(
+            {
+                "current_doc": "doc_api",
+                "phase": "generating",
+                "message": message,
+                "api_chunk_state": chunk_state,
+            }
+        )
+        arch.generation_progress = progress
+        db.commit()
+        db.refresh(arch)
+
+    base_prompt = _doc_prompt("doc_api", srs_summary, project_name, project_type)
+    if suite_canon:
+        base_prompt += f"\n\n{format_canon_prompt_block(suite_canon)}"
+    if cross_doc_context:
+        base_prompt += f"\n\nPRIOR DOCUMENTS:\n{cross_doc_context}"
+
+    system = (
+        "You are a senior software architect. Return strictly structured JSON. "
+        "Mermaid diagram strings must use valid syntax."
     )
+
+    if not chunk_state.get("shell_completed"):
+        await update_job_status(
+            arch.id,
+            "processing",
+            message="Generating API document shell…",
+        )
+        shell_result = await ai_call(
+            prompt=base_prompt
+            + "\n\nGenerate ONLY the API document shell: overview, base_url, auth, "
+            "versioning, response_format, global_headers, and diagrams. "
+            "Leave endpoints empty — they will be generated in separate calls.",
+            response_model=ApiShellSchema,
+            system=system,
+            max_tokens=8000,
+            task_type=task_type,
+            screen="architecture",
+        )
+        shell_data = sanitize_doc_diagrams(shell_result.model_dump())
+        persist_chunk_state(message="API shell complete — generating endpoint chunks…")
+
+    total = len(fr_groups)
+    for idx, fr_group in enumerate(fr_groups):
+        if idx in completed_chunks:
+            continue
+
+        fr_labels = ", ".join(
+            str(fr.get("fr_number", "")) for fr in fr_group if fr.get("fr_number")
+        ) or f"group {idx + 1}"
+        await update_job_status(
+            arch.id,
+            "processing",
+            message=f"Generating API endpoints chunk {idx + 1}/{total} ({fr_labels})…",
+        )
+
+        fr_block = json.dumps(fr_group, indent=2, default=str)[:6000]
+        chunk_prompt = (
+            f"{base_prompt}\n\n"
+            f"Generate REST endpoints ONLY for these functional requirements:\n{fr_block}\n\n"
+            "Return endpoints linked to the FR ids above. Use /api/v1 paths, JWT auth, "
+            "request/response bodies, error codes, and file paths. "
+            "Do not repeat endpoints from other FR groups."
+        )
+        if merged_endpoints:
+            existing_ids = [
+                ep.get("id") or ep.get("path", "")
+                for ep in merged_endpoints[:20]
+                if isinstance(ep, dict)
+            ]
+            chunk_prompt += (
+                f"\n\nAlready generated endpoint ids/paths (do not duplicate):\n"
+                f"{json.dumps(existing_ids)}"
+            )
+
+        chunk_result = await ai_call(
+            prompt=chunk_prompt,
+            response_model=ApiChunkSchema,
+            system=system,
+            max_tokens=8000,
+            task_type=task_type,
+            screen="architecture",
+        )
+        for ep in chunk_result.endpoints:
+            merged_endpoints.append(ep.model_dump())
+        completed_chunks.add(idx)
+        persist_chunk_state(
+            message=f"Completed API chunk {idx + 1}/{total}",
+        )
+
+    result = {**shell_data, "endpoints": merged_endpoints}
+    return sanitize_doc_diagrams(result)
 
 
 def _rate_limit_wait_seconds(exc: RateLimitError) -> int:

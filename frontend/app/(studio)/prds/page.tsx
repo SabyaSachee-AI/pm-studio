@@ -2,8 +2,14 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
 import { Button } from "@/components/ui/button";
 import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
+import {
+  aiButtonClassName,
+  aiButtonLabel,
+  useAiJob,
+} from "@/lib/hooks/useAiJob";
 import { api, type PRD, type Project, type Requirement } from "@/lib/api";
 
 export default function PrdsPage() {
@@ -12,7 +18,18 @@ export default function PrdsPage() {
   const [requirements, setRequirements] = useState<Requirement[]>([]);
   const [prds, setPrds] = useState<PRD[]>([]);
   const [reqId, setReqId] = useState("");
-  const [status, setStatus] = useState("");
+
+  const aiJob = useAiJob({
+    onComplete: () => {
+      if (projectId) void api.listPrds(projectId).then(setPrds);
+    },
+  });
+
+  const generateBtn = aiButtonLabel(
+    "Generate PRD",
+    aiJob.status,
+    aiJob.operationName === "Generating PRD",
+  );
 
   useEffect(() => {
     api.listProjects().then((p) => {
@@ -35,11 +52,7 @@ export default function PrdsPage() {
     const { task_id } = (await api.generatePrd(projectId, reqId)) as {
       task_id: string;
     };
-    setStatus("Generating...");
-    api.subscribeTask(task_id, (data) => {
-      setStatus(data.status);
-      if (data.status === "SUCCESS") api.listPrds(projectId).then(setPrds);
-    });
+    aiJob.startJob(task_id, "Generating PRD");
   }
 
   return (
@@ -71,9 +84,21 @@ export default function PrdsPage() {
             </option>
           ))}
         </select>
-        <Button onClick={handleGenerate}>Generate PRD</Button>
-        {status && <span className="text-sm text-gray-400">{status}</span>}
+        <Button
+          onClick={() => void handleGenerate()}
+          disabled={generateBtn.disabled || aiJob.isRunning}
+          className={aiButtonClassName(generateBtn.variant)}
+        >
+          {generateBtn.label}
+        </Button>
       </div>
+      {aiJob.isVisible ? (
+        <AiStatusBar
+          {...aiJobStatusBarProps(aiJob)}
+          onCancel={aiJob.cancel}
+          onTryAgain={() => void handleGenerate()}
+        />
+      ) : null}
       <div className="rounded-xl border border-gray-800">
         {prds.map((p) => (
           <Link

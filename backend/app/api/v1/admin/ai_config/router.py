@@ -9,7 +9,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_roles
-from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.organization import Organization
 from app.models.user import User, UserRole
@@ -17,27 +16,33 @@ from app.schemas.ai_config import (
     AiConfigResponse,
     AiTierUpdate,
     FreeModeUpdate,
+    ModelCatalogEntry,
     ProviderConfigUpdate,
     ProviderStatus,
     ProviderUsage,
     RoutingRow,
     ScreenModelInfo,
     ScreenOverrideUpdate,
+    TierModelCatalog,
+)
+from app.services.ai.model_catalog import (
+    PROVIDER_META,
+    build_configured_model_catalog,
+    build_full_model_catalog,
+    catalog_to_model_options,
 )
 from app.services.ai.providers import (
     ALL_PROVIDERS,
     DEFAULT_PAID_ROUTING,
-    FREE_MODEL_OPTIONS,
     FREE_ROUTING,
-    LOW_COST_MODEL_OPTIONS,
     LOW_COST_ROUTING,
-    PAID_MODEL_OPTIONS,
     SCREEN_DEFAULT_TASK,
     chain_fallback_summary,
     free_fallback_chain,
     low_cost_fallback_chain,
     model_display_name,
 )
+from app.services.ai.provider_keys import available_providers, provider_env_keys
 from app.services.ai.router import get_ai_router
 from app.services.ai.usage_tracker import PROVIDER_DAILY_LIMITS, get_daily_usage
 
@@ -63,27 +68,33 @@ def _mask_key(key: str | None) -> str | None:
 
 
 def _provider_status(org: Organization, provider: str) -> ProviderStatus:
-    settings = get_settings()
     configs = org.ai_provider_configs or {}
     cfg = configs.get(provider) or {}
-    env_keys = {
-        "anthropic": settings.anthropic_api_key,
-        "openai": settings.openai_api_key,
-        "openrouter": settings.openrouter_api_key,
-        "groq": settings.groq_api_key,
-        "together": settings.together_api_key,
-        "gemini": settings.gemini_api_key,
-        "cerebras": settings.cerebras_api_key,
-        "deepseek": settings.deepseek_api_key,
-    }
+    env_keys = provider_env_keys()
     api_key = cfg.get("api_key") or env_keys.get(provider)
     configured = bool(api_key)
     is_enabled = cfg.get("is_enabled", configured)
+    meta = PROVIDER_META.get(provider, {})
     return ProviderStatus(
         provider=provider,
         configured=configured,
         is_enabled=bool(is_enabled and configured),
         masked_key=_mask_key(api_key),
+        label=str(meta.get("label", provider)),
+        signup_url=meta.get("signup_url"),
+        note=meta.get("note"),
+        default_tier=str(meta.get("default_tier", "free")),
+    )
+
+
+def _to_tier_catalog(raw: dict[str, list]) -> TierModelCatalog:
+    def convert(items: list) -> list[ModelCatalogEntry]:
+        return [ModelCatalogEntry(**item) for item in items]
+
+    return TierModelCatalog(
+        free=convert(raw.get("free", [])),
+        low_cost=convert(raw.get("low_cost", [])),
+        premium=convert(raw.get("premium", [])),
     )
 
 
@@ -165,6 +176,13 @@ async def _build_response(org: Organization, full: bool = True) -> AiConfigRespo
         else [_provider_status(org, "openrouter")]
     )
     daily_usage = await _build_daily_usage(org) if full else {}
+    available = available_providers(org)
+    full_catalog = build_full_model_catalog(available)
+    configured_catalog = build_configured_model_catalog(available)
+
+    free_opts = catalog_to_model_options(full_catalog, "free")
+    low_opts = catalog_to_model_options(full_catalog, "low_cost")
+    paid_opts = catalog_to_model_options(full_catalog, "premium")
 
     return AiConfigResponse(
         ai_tier=tier,
@@ -181,10 +199,14 @@ async def _build_response(org: Organization, full: bool = True) -> AiConfigRespo
         else [],
         screen_overrides=normalized_overrides,
         screen_models=screen_models,
-        paid_model_options=PAID_MODEL_OPTIONS,
-        free_model_options=FREE_MODEL_OPTIONS,
-        low_cost_model_options=LOW_COST_MODEL_OPTIONS,
+        paid_model_options=paid_opts,
+        free_model_options=free_opts,
+        low_cost_model_options=low_opts,
         daily_usage=daily_usage,
+        model_catalog=_to_tier_catalog(full_catalog) if full else TierModelCatalog(),
+        configured_model_catalog=_to_tier_catalog(configured_catalog)
+        if full
+        else TierModelCatalog(),
     )
 
 
@@ -253,9 +275,13 @@ async def use_all_free(
     _sync_tier_flags(org, "free")
     org.screen_model_overrides = {}
     configs = dict(org.ai_provider_configs or {})
-    for prov in ("openrouter", "groq", "gemini"):
+    free_providers = (
+        "openrouter", "groq", "gemini", "cerebras", "sambanova", "nvidia",
+        "huggingface", "siliconflow", "alibaba", "github",
+    )
+    for prov in free_providers:
         prov_cfg = dict(configs.get(prov) or {})
-        if prov_cfg.get("api_key") or prov == "openrouter":
+        if prov_cfg.get("api_key"):
             prov_cfg["is_enabled"] = True
         configs[prov] = prov_cfg
     org.ai_provider_configs = configs

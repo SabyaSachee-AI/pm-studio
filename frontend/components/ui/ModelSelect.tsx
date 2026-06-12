@@ -12,6 +12,13 @@ const PROVIDER_ICONS: Record<string, string> = {
   gemini: "✨",
   cerebras: "🔶",
   deepseek: "🌊",
+  sambanova: "🔴",
+  nvidia: "🟩",
+  huggingface: "🤗",
+  aimlapi: "🌐",
+  siliconflow: "💎",
+  alibaba: "☁️",
+  github: "🐙",
 };
 
 const GROUP_LABELS: Record<string, string> = {
@@ -73,9 +80,9 @@ export function ModelSelect({
   return (
     <select
       aria-label="AI model"
-      title="Auto exports saved content. Pick a model to enhance text with AI first."
+      title={`Auto uses tier routing. ${options.length} models available.`}
       className={`rounded-md border border-gray-700 bg-gray-950 text-gray-200 ${
-        compact ? "w-[6.5rem] px-2 py-1 text-xs" : "min-w-[10rem] px-2 py-1.5 text-sm"
+        compact ? "max-w-[12rem] px-2 py-1 text-xs" : "min-w-[14rem] max-w-[20rem] px-2 py-1.5 text-sm"
       } ${className}`}
       value={currentKey}
       disabled={loading}
@@ -91,15 +98,15 @@ export function ModelSelect({
     >
       <option value="">Auto</option>
       {Array.from(grouped.entries()).map(([group, items]) => (
-        <optgroup key={group} label={GROUP_LABELS[group] ?? group}>
+        <optgroup key={group} label={`${GROUP_LABELS[group] ?? group} (${items.length})`}>
           {items.map((opt) => (
             <option
               key={`${opt.provider}-${opt.model}`}
               value={`${opt.provider}:${opt.model}`}
-              disabled={!opt.available}
+              disabled={opt.available === false}
             >
               {PROVIDER_ICONS[opt.provider] ?? "•"} {opt.label}
-              {!opt.available ? " (no key)" : ""}
+              {opt.available === false ? " (no key)" : ""}
             </option>
           ))}
         </optgroup>

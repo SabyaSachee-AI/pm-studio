@@ -15,6 +15,13 @@ ALL_PROVIDERS: tuple[str, ...] = (
     "cerebras",
     "deepseek",
     "together",
+    "sambanova",
+    "nvidia",
+    "huggingface",
+    "aimlapi",
+    "siliconflow",
+    "alibaba",
+    "github",
 )
 
 
@@ -26,6 +33,73 @@ class RoutingEntry(TypedDict, total=False):
     # model_1 .. model_15 populated by _build_free_routing
 
 
+# ---------------------------------------------------------------------------
+# Fallback tails — multi-provider pools (June 2026, 15 providers)
+#
+# HEAVY — PRD/SRS/architecture/specs/analysis. Large context only.
+# Separate quota pools after OpenRouter block: SiliconFlow, Alibaba, HF,
+# GitHub, SambaNova, Groq, NVIDIA NIM.
+#
+# LIGHT — module extract, quality check, cost estimate. Speed first.
+# ---------------------------------------------------------------------------
+
+_MAX_CHAIN_MODELS = 20
+
+HEAVY_FREE_TAIL: list[tuple[str, str]] = [
+    ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
+    ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+    ("openrouter", "openai/gpt-oss-120b:free"),
+    ("openrouter", "google/gemma-4-31b-it:free"),
+    ("openrouter", "nex-agi/nex-n2-pro:free"),
+    ("openrouter", "moonshotai/kimi-k2.6:free"),
+    ("openrouter", "poolside/laguna-xs.2:free"),
+    ("openrouter", "nvidia/nemotron-3-nano-30b-a3b:free"),
+    ("siliconflow", "Qwen/Qwen3.5-35B-A3B"),
+    ("siliconflow", "nex-agi/Nex-N2-Pro"),
+    ("alibaba", "qwen-long"),
+    ("alibaba", "qwen-plus"),
+    ("huggingface", "Qwen/Qwen2.5-Coder-32B-Instruct"),
+    ("huggingface", "meta-llama/Llama-3.3-70B-Instruct"),
+    ("sambanova", "Meta-Llama-3.3-70B-Instruct"),
+    ("groq", "llama-3.3-70b-versatile"),
+    # 4096-token output cap providers — last resort for heavy tasks
+    ("nvidia", "meta/llama-3.1-405b-instruct"),
+    ("github", "Llama-4-Scout-17B-16E"),
+    ("github", "DeepSeek-R1"),
+]
+
+LIGHT_FREE_TAIL: list[tuple[str, str]] = [
+    ("groq", "llama-3.3-70b-versatile"),
+    ("groq", "llama-3.1-8b-instant"),
+    ("cerebras", "zai-glm-4.7"),
+    ("cerebras", "gpt-oss-120b"),
+    ("siliconflow", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"),
+    ("github", "DeepSeek-R1"),
+    ("huggingface", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"),
+    ("openrouter", "openai/gpt-oss-20b:free"),
+    ("openrouter", "nvidia/nemotron-3-nano-30b-a3b:free"),
+    ("openrouter", "google/gemma-4-26b-a4b-it:free"),
+    ("sambanova", "Meta-Llama-3.3-70B-Instruct"),
+    ("openrouter", "moonshotai/kimi-k2.6:free"),
+]
+
+LOW_COST_HEAVY_TAIL: list[tuple[str, str]] = [
+    ("aimlapi", "deepseek/deepseek-r1"),
+    ("aimlapi", "google/gemini-2.5-flash"),
+    ("aimlapi", "nvidia/nemotron-3-ultra"),
+    ("alibaba", "qwen-max"),
+    ("deepseek", "deepseek-reasoner"),
+    ("together", "Qwen/Qwen3-Coder-30B-Instruct"),
+    *HEAVY_FREE_TAIL,
+]
+
+LOW_COST_LIGHT_TAIL: list[tuple[str, str]] = [
+    ("deepseek", "deepseek-chat"),
+    ("aimlapi", "deepseek/deepseek-r1"),
+    *LIGHT_FREE_TAIL,
+]
+
+
 def _build_free_routing(
     *,
     task_label: str,
@@ -33,15 +107,17 @@ def _build_free_routing(
     quality_note: str = "",
     quality_stars: int = 4,
     prompt_enhancement: bool = False,
+    tail: list[tuple[str, str]] | None = None,
+    max_models: int = _MAX_CHAIN_MODELS,
 ) -> RoutingEntry:
-    """Merge task-specific top-4 with shared tail; dedupe; cap at 15 models."""
+    """Merge task-specific top-4 with a fallback tail; dedupe; cap at max_models."""
     seen: set[tuple[str, str]] = set()
     ordered: list[tuple[str, str]] = []
-    for entry in top4 + SHARED_FREE_TAIL:
+    for entry in top4 + (tail if tail is not None else HEAVY_FREE_TAIL):
         if entry not in seen:
             seen.add(entry)
             ordered.append(entry)
-        if len(ordered) >= 15:
+        if len(ordered) >= max_models:
             break
     result: RoutingEntry = {
         "task_label": task_label,
@@ -53,30 +129,34 @@ def _build_free_routing(
         result[f"model_{idx}"] = pair  # type: ignore[literal-required]
     return result
 
-
-# Shared fallback tail — multi-provider free pool (Together omitted: no reliable free tier)
-SHARED_FREE_TAIL: list[tuple[str, str]] = [
-    ("groq", "llama-4-scout-17b-16e-instruct"),
-    ("groq", "llama-3.3-70b-versatile"),
-    ("openrouter", "moonshotai/kimi-k2.6:free"),
-    ("groq", "qwen/qwen3-32b"),
-    ("cerebras", "zai-glm-4.7"),
-    ("openrouter", "poolside/laguna-xs.2:free"),
-    ("openrouter", "openai/gpt-oss-20b:free"),
-    ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
-    ("openrouter", "google/gemma-4-31b-it:free"),
-]
-
 FREE_ROUTING: dict[str, RoutingEntry] = {
     "req_analyze": _build_free_routing(
         task_label="Requirement Analysis",
         top4=[
             ("gemini", "gemini-2.5-flash"),
-            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
-            ("openrouter", "openai/gpt-oss-120b:free"),
             ("openrouter", "openrouter/owl-alpha"),
+            ("siliconflow", "Qwen/Qwen3.5-35B-A3B"),
+            ("alibaba", "qwen-long"),
         ],
-        quality_note="Gemini 2.5 Flash + Nemotron Super for full-PDF context.",
+        quality_note=(
+            "Gemini 2.5 Flash primary; Owl Alpha 1.05M ctx; SiliconFlow + "
+            "Alibaba Qwen Long as separate free quota pools."
+        ),
+        quality_stars=5,
+        prompt_enhancement=True,
+    ),
+    "req_synthesize": _build_free_routing(
+        task_label="Feedback Synthesis",
+        top4=[
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "openrouter/owl-alpha"),
+            ("siliconflow", "nex-agi/Nex-N2-Pro"),
+            ("openrouter", "nex-agi/nex-n2-pro:free"),
+        ],
+        quality_note=(
+            "1M-context models fit requirement + full feedback in one call; "
+            "Nex N2 Pro adds reasoning for conflict resolution."
+        ),
         quality_stars=5,
         prompt_enhancement=True,
     ),
@@ -86,7 +166,7 @@ FREE_ROUTING: dict[str, RoutingEntry] = {
             ("openrouter", "openai/gpt-oss-120b:free"),
             ("gemini", "gemini-2.5-flash"),
             ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
-            ("openrouter", "google/gemma-4-31b-it:free"),
+            ("openrouter", "nex-agi/nex-n2-pro:free"),
         ],
         quality_note="GPT-OSS 120B: best structured JSON for PRDSchema.",
         quality_stars=5,
@@ -109,57 +189,13 @@ FREE_ROUTING: dict[str, RoutingEntry] = {
         top4=[
             ("gemini", "gemini-2.5-flash"),
             ("openrouter", "poolside/laguna-m.1:free"),
-            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+            ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
             ("openrouter", "openai/gpt-oss-120b:free"),
         ],
         quality_note=(
             "Gemini 2.5 Flash first — fast reasoning for cross-linked arch JSON. "
-            "Laguna M.1 for coding-heavy docs."
+            "Laguna M.1 for coding-heavy docs; Nemotron Ultra for max quality."
         ),
-        quality_stars=5,
-        prompt_enhancement=True,
-    ),
-    "req_synthesize": _build_free_routing(
-        task_label="Feedback Synthesis",
-        top4=[
-            ("gemini", "gemini-2.5-flash"),
-            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
-            ("openrouter", "openai/gpt-oss-120b:free"),
-            ("openrouter", "openrouter/owl-alpha"),
-        ],
-        quality_note="1M context models fit requirement + full feedback in one call.",
-        quality_stars=5,
-        prompt_enhancement=True,
-    ),
-    "prd_rewrite": _build_free_routing(
-        task_label="PRD Rewrite",
-        top4=[
-            ("openrouter", "openai/gpt-oss-120b:free"),
-            ("openrouter", "google/gemma-4-31b-it:free"),
-            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
-            ("openrouter", "openai/gpt-oss-20b:free"),
-        ],
-        quality_stars=4,
-    ),
-    "srs_rewrite": _build_free_routing(
-        task_label="SRS Rewrite",
-        top4=[
-            ("openrouter", "openai/gpt-oss-120b:free"),
-            ("openrouter", "google/gemma-4-31b-it:free"),
-            ("gemini", "gemini-2.5-flash"),
-            ("openrouter", "openai/gpt-oss-20b:free"),
-        ],
-        quality_stars=4,
-    ),
-    "spec_generate": _build_free_routing(
-        task_label="Task Specification",
-        top4=[
-            ("openrouter", "poolside/laguna-m.1:free"),
-            ("openrouter", "openai/gpt-oss-120b:free"),
-            ("gemini", "gemini-2.5-flash"),
-            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
-        ],
-        quality_note="Laguna M.1 is purpose-built for Cursor-ready specs.",
         quality_stars=5,
         prompt_enhancement=True,
     ),
@@ -169,7 +205,39 @@ FREE_ROUTING: dict[str, RoutingEntry] = {
             ("openrouter", "poolside/laguna-m.1:free"),
             ("gemini", "gemini-2.5-flash"),
             ("openrouter", "openai/gpt-oss-120b:free"),
+            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+        ],
+        quality_stars=4,
+    ),
+    "spec_generate": _build_free_routing(
+        task_label="Task Specification",
+        top4=[
+            ("openrouter", "poolside/laguna-m.1:free"),
+            ("huggingface", "Qwen/Qwen2.5-Coder-32B-Instruct"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("siliconflow", "Qwen/Qwen3.5-35B-A3B"),
+        ],
+        quality_note="Laguna M.1 is purpose-built for code/API specs.",
+        quality_stars=5,
+        prompt_enhancement=True,
+    ),
+    "prd_rewrite": _build_free_routing(
+        task_label="PRD Rewrite",
+        top4=[
+            ("openrouter", "openai/gpt-oss-120b:free"),
             ("openrouter", "google/gemma-4-31b-it:free"),
+            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
+            ("gemini", "gemini-2.5-flash"),
+        ],
+        quality_stars=4,
+    ),
+    "srs_rewrite": _build_free_routing(
+        task_label="SRS Rewrite",
+        top4=[
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "google/gemma-4-31b-it:free"),
+            ("openrouter", "nvidia/nemotron-3-super-120b-a12b:free"),
         ],
         quality_stars=4,
     ),
@@ -177,31 +245,34 @@ FREE_ROUTING: dict[str, RoutingEntry] = {
         task_label="Module Extraction",
         top4=[
             ("openrouter", "openai/gpt-oss-20b:free"),
-            ("groq", "llama-4-scout-17b-16e-instruct"),
-            ("openrouter", "google/gemma-4-26b-a4b-it:free"),
-            ("cerebras", "zai-glm-4.7"),
+            ("groq", "llama-3.3-70b-versatile"),
+            ("github", "Llama-4-Scout-17B-16E"),
+            ("siliconflow", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"),
         ],
         quality_stars=3,
+        tail=LIGHT_FREE_TAIL,
     ),
     "quality_check": _build_free_routing(
         task_label="Quality Check",
         top4=[
             ("openrouter", "openai/gpt-oss-20b:free"),
-            ("groq", "llama-4-scout-17b-16e-instruct"),
+            ("groq", "llama-3.3-70b-versatile"),
             ("cerebras", "zai-glm-4.7"),
             ("openrouter", "google/gemma-4-26b-a4b-it:free"),
         ],
         quality_stars=3,
+        tail=LIGHT_FREE_TAIL,
     ),
     "cost_estimate": _build_free_routing(
         task_label="Cost Estimation",
         top4=[
             ("openrouter", "openai/gpt-oss-20b:free"),
-            ("groq", "llama-4-scout-17b-16e-instruct"),
+            ("groq", "llama-3.3-70b-versatile"),
             ("cerebras", "zai-glm-4.7"),
             ("openrouter", "google/gemma-4-26b-a4b-it:free"),
         ],
         quality_stars=3,
+        tail=LIGHT_FREE_TAIL,
     ),
 }
 
@@ -210,128 +281,147 @@ LOW_COST_ROUTING: dict[str, RoutingEntry] = {
         task_label="Requirement Analysis (low cost)",
         top4=[
             ("deepseek", "deepseek-chat"),
-            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("aimlapi", "deepseek/deepseek-r1"),
+            ("alibaba", "qwen-max"),
             ("gemini", "gemini-2.5-flash"),
         ],
-        quality_note="DeepSeek V3 ~$0.14/1M tokens — best value for analysis.",
+        quality_note="DeepSeek + AIML API + Alibaba Qwen Max — best value for analysis.",
         quality_stars=4,
-    ),
-    "prd_generate": _build_free_routing(
-        task_label="PRD Generation (low cost)",
-        top4=[
-            ("deepseek", "deepseek-chat"),
-            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-            ("openrouter", "openai/gpt-oss-120b:free"),
-            ("gemini", "gemini-2.5-flash"),
-        ],
-        quality_stars=4,
-        prompt_enhancement=True,
-    ),
-    "srs_generate": _build_free_routing(
-        task_label="SRS Generation (low cost)",
-        top4=[
-            ("deepseek", "deepseek-chat"),
-            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-            ("openrouter", "openai/gpt-oss-120b:free"),
-            ("gemini", "gemini-2.5-flash"),
-        ],
-        quality_stars=4,
-        prompt_enhancement=True,
-    ),
-    "arch_generate": _build_free_routing(
-        task_label="Architecture Suite (low cost)",
-        top4=[
-            ("deepseek", "deepseek-chat"),
-            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-            ("gemini", "gemini-2.5-flash"),
-            ("openrouter", "poolside/laguna-m.1:free"),
-        ],
-        quality_note="DeepSeek for nested JSON; Together 70B Turbo as fast fallback.",
-        quality_stars=4,
-        prompt_enhancement=True,
+        tail=LOW_COST_HEAVY_TAIL,
     ),
     "req_synthesize": _build_free_routing(
         task_label="Feedback Synthesis (low cost)",
         top4=[
             ("deepseek", "deepseek-chat"),
+            ("aimlapi", "deepseek/deepseek-r1"),
             ("gemini", "gemini-2.5-flash"),
-            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("siliconflow", "nex-agi/Nex-N2-Pro"),
         ],
         quality_stars=4,
+        tail=LOW_COST_HEAVY_TAIL,
     ),
-    "prd_rewrite": _build_free_routing(
-        task_label="PRD Rewrite (low cost)",
+    "prd_generate": _build_free_routing(
+        task_label="PRD Generation (low cost)",
         top4=[
             ("deepseek", "deepseek-chat"),
+            ("aimlapi", "google/gemini-2.5-flash"),
             ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
             ("openrouter", "openai/gpt-oss-120b:free"),
-            ("gemini", "gemini-2.5-flash"),
-        ],
-        quality_stars=4,
-    ),
-    "srs_rewrite": _build_free_routing(
-        task_label="SRS Rewrite (low cost)",
-        top4=[
-            ("deepseek", "deepseek-chat"),
-            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-            ("openrouter", "openai/gpt-oss-120b:free"),
-            ("gemini", "gemini-2.5-flash"),
-        ],
-        quality_stars=4,
-    ),
-    "spec_generate": _build_free_routing(
-        task_label="Task Specification (low cost)",
-        top4=[
-            ("deepseek", "deepseek-chat"),
-            ("openrouter", "poolside/laguna-m.1:free"),
-            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
-            ("gemini", "gemini-2.5-flash"),
         ],
         quality_stars=4,
         prompt_enhancement=True,
+        tail=LOW_COST_HEAVY_TAIL,
+    ),
+    "srs_generate": _build_free_routing(
+        task_label="SRS Generation (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("aimlapi", "google/gemini-2.5-flash"),
+            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+        ],
+        quality_stars=4,
+        prompt_enhancement=True,
+        tail=LOW_COST_HEAVY_TAIL,
+    ),
+    "arch_generate": _build_free_routing(
+        task_label="Architecture Suite (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("aimlapi", "nvidia/nemotron-3-ultra"),
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "poolside/laguna-m.1:free"),
+        ],
+        quality_note="DeepSeek + AIML Nemotron Ultra; free pools as backup.",
+        quality_stars=4,
+        prompt_enhancement=True,
+        tail=LOW_COST_HEAVY_TAIL,
     ),
     "arch_single_doc": _build_free_routing(
         task_label="Architecture Doc single (low cost)",
         top4=[
             ("deepseek", "deepseek-chat"),
             ("openrouter", "poolside/laguna-m.1:free"),
+            ("aimlapi", "google/gemini-2.5-flash"),
             ("gemini", "gemini-2.5-flash"),
-            ("together", "meta-llama/Llama-3.3-70B-Instruct-Turbo"),
         ],
         quality_stars=4,
+        tail=LOW_COST_HEAVY_TAIL,
+    ),
+    "spec_generate": _build_free_routing(
+        task_label="Task Specification (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("together", "Qwen/Qwen3-Coder-30B-Instruct"),
+            ("openrouter", "poolside/laguna-m.1:free"),
+            ("huggingface", "Qwen/Qwen2.5-Coder-32B-Instruct"),
+        ],
+        quality_stars=4,
+        prompt_enhancement=True,
+        tail=LOW_COST_HEAVY_TAIL,
+    ),
+    "prd_rewrite": _build_free_routing(
+        task_label="PRD Rewrite (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("aimlapi", "deepseek/deepseek-r1"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+        ],
+        quality_stars=4,
+        tail=LOW_COST_HEAVY_TAIL,
+    ),
+    "srs_rewrite": _build_free_routing(
+        task_label="SRS Rewrite (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("aimlapi", "deepseek/deepseek-r1"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+        ],
+        quality_stars=4,
+        tail=LOW_COST_HEAVY_TAIL,
     ),
     "module_extract": _build_free_routing(
         task_label="Module Extraction (low cost)",
         top4=[
             ("deepseek", "deepseek-chat"),
-            ("groq", "llama-4-scout-17b-16e-instruct"),
-            ("openrouter", "openai/gpt-oss-20b:free"),
-            ("cerebras", "zai-glm-4.7"),
+            ("aimlapi", "deepseek/deepseek-r1"),
+            ("groq", "llama-3.3-70b-versatile"),
+            ("github", "Llama-4-Scout-17B-16E"),
         ],
         quality_stars=3,
+        tail=LOW_COST_LIGHT_TAIL,
     ),
     "quality_check": _build_free_routing(
         task_label="Quality Check (low cost)",
         top4=[
             ("deepseek", "deepseek-chat"),
-            ("groq", "llama-4-scout-17b-16e-instruct"),
-            ("openrouter", "openai/gpt-oss-20b:free"),
+            ("groq", "llama-3.3-70b-versatile"),
+            ("siliconflow", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"),
             ("cerebras", "zai-glm-4.7"),
         ],
         quality_stars=3,
+        tail=LOW_COST_LIGHT_TAIL,
     ),
     "cost_estimate": _build_free_routing(
         task_label="Cost Estimation (low cost)",
         top4=[
             ("deepseek", "deepseek-chat"),
-            ("groq", "llama-4-scout-17b-16e-instruct"),
-            ("openrouter", "openai/gpt-oss-20b:free"),
+            ("groq", "llama-3.3-70b-versatile"),
+            ("siliconflow", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"),
             ("cerebras", "zai-glm-4.7"),
         ],
         quality_stars=3,
+        tail=LOW_COST_LIGHT_TAIL,
     ),
+}
+
+# Default model per tier — used when a task type has no specific routing.
+TIER_DEFAULT_MODEL: dict[str, tuple[str, str]] = {
+    "free": ("gemini", "gemini-2.5-flash"),          # 1,500 req/day — highest free quota
+    "low_cost": ("deepseek", "deepseek-chat"),       # ~$0.14/1M tokens — best value
+    "premium": ("anthropic", "claude-sonnet-4-5"),   # best quality
 }
 
 FREE_MODE_QUALITY_BOOSTS: dict[str, str] = {
@@ -409,11 +499,31 @@ MODEL_DISPLAY_NAMES: dict[str, str] = {
     "poolside/laguna-xs.2:free": "Poolside Laguna XS.2 (FREE)",
     "openrouter/owl-alpha": "OpenRouter Owl Alpha (FREE)",
     "moonshotai/kimi-k2.6:free": "Kimi K2.6 (FREE)",
-    "llama-4-scout-17b-16e-instruct": "Llama 4 Scout (Groq)",
+    "nex-agi/nex-n2-pro:free": "Nex N2 Pro (FREE)",
+    "nvidia/nemotron-3-nano-30b-a3b:free": "NVIDIA Nemotron Nano 30B (FREE)",
     "llama-3.3-70b-versatile": "Llama 3.3 70B (Groq)",
     "qwen/qwen3-32b": "Qwen3 32B (Groq)",
     "zai-glm-4.7": "GLM 4.7 (Cerebras)",
+    "gpt-oss-120b": "GPT-OSS 120B (Cerebras)",
     "meta-llama/Llama-3.3-70B-Instruct-Turbo": "Llama 3.3 70B Turbo (Together)",
+    "Meta-Llama-3.3-70B-Instruct": "Llama 3.3 70B (SambaNova)",
+    "meta/llama-3.1-405b-instruct": "Llama 3.1 405B (NVIDIA NIM)",
+    "Qwen/Qwen3.5-35B-A3B": "Qwen 3.5 35B (SiliconFlow)",
+    "nex-agi/Nex-N2-Pro": "Nex N2 Pro (SiliconFlow)",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": "DeepSeek R1 Distill 7B",
+    "Qwen/Qwen2.5-Coder-32B-Instruct": "Qwen 2.5 Coder 32B",
+    "meta-llama/Llama-3.3-70B-Instruct": "Llama 3.3 70B (HuggingFace)",
+    "Llama-4-Scout-17B-16E": "Llama 4 Scout (GitHub)",
+    "DeepSeek-R1": "DeepSeek R1 (GitHub/SambaNova)",
+    "qwen-long": "Qwen Long (Alibaba)",
+    "qwen-max": "Qwen Max (Alibaba)",
+    "qwen-plus": "Qwen Plus (Alibaba)",
+    "deepseek/deepseek-r1": "DeepSeek R1 (AIML API)",
+    "google/gemini-2.5-flash": "Gemini 2.5 Flash (AIML API)",
+    "nvidia/nemotron-3-ultra": "Nemotron Ultra (AIML API)",
+    "deepseek-reasoner": "DeepSeek R1 (DeepSeek)",
+    "Qwen/Qwen3-Coder-30B-Instruct": "Qwen3 Coder 30B (Together)",
+    "llama-3.1-8b-instant": "Llama 3.1 8B Instant (Groq)",
 }
 
 PAID_MODEL_OPTIONS: list[dict[str, str]] = [
@@ -493,6 +603,13 @@ FREE_MODEL_OPTIONS: list[dict[str, str]] = [
         "tier": "Fast",
         "cost": "Free",
     },
+    {
+        "provider": "openrouter",
+        "model": "openrouter/owl-alpha",
+        "label": "OpenRouter Owl Alpha (FREE)",
+        "tier": "1.05M context",
+        "cost": "Free",
+    },
 ]
 
 
@@ -504,13 +621,15 @@ def model_display_name(model: str) -> str:
 def chain_fallback_summary(routing: RoutingEntry, max_labels: int = 4) -> str:
     """Summarize fallback chain for admin UI."""
     labels: list[str] = []
-    for idx in range(2, 16):
+    for idx in range(2, _MAX_CHAIN_MODELS + 1):
         entry = routing.get(f"model_{idx}")
         if not entry:
             break
         labels.append(model_display_name(entry[1]).replace(" (FREE)", ""))
         if len(labels) >= max_labels:
-            remaining = sum(1 for j in range(idx + 1, 16) if routing.get(f"model_{j}"))
+            remaining = sum(
+                1 for j in range(idx + 1, _MAX_CHAIN_MODELS + 1) if routing.get(f"model_{j}")
+            )
             if remaining:
                 labels.append(f"+{remaining} more")
             break

@@ -17,12 +17,12 @@ async def get_job_status(task_id: str) -> dict:
     """Poll the status of a Celery background job."""
     result = AsyncResult(task_id, app=celery_app)
     response: dict = {"task_id": task_id, "status": result.status}
+    if isinstance(result.info, dict) and result.info:
+        response["meta"] = result.info
     if result.status == "SUCCESS":
         response["result"] = result.result
     elif result.status == "FAILURE":
         response["error"] = str(result.result)
-    elif result.status == "PROGRESS":
-        response["meta"] = result.info or {}
     return response
 
 

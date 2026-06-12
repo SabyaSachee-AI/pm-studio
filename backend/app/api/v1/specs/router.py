@@ -15,6 +15,8 @@ from app.models.user import User
 from app.schemas.spec import (
     SpecAssignRequest,
     SpecGenerateRequest,
+    SpecRegenerateRequest,
+    SpecUpdateRequest,
     TaskSpecResponse,
 )
 from app.services.notification.service import create_notification
@@ -36,6 +38,72 @@ def _to_spec_response(spec: TaskSpec) -> TaskSpecResponse:
     )
 
 
+async def _get_task_spec_row(db: AsyncSession, task_id: UUID) -> TaskSpec | None:
+    result = await db.execute(select(TaskSpec).where(TaskSpec.task_id == task_id))
+    return result.scalar_one_or_none()
+
+
+async def _queue_spec_generation(
+    db: AsyncSession,
+    task_id: UUID,
+    *,
+    replace: bool,
+    model_provider: str | None,
+    model_id: str | None,
+) -> dict[str, str]:
+    """Reuse the single task_specs row for a task (unique on task_id)."""
+    spec = await _get_task_spec_row(db, task_id)
+
+    if spec is not None and spec.deleted_at is None and not replace:
+        if spec.status == TaskSpecStatus.ready:
+            raise HTTPException(
+                status_code=400,
+                detail="Spec already exists for this task. Use regenerate to replace it.",
+            )
+        if spec.status == TaskSpecStatus.failed:
+            has_partial = bool(
+                (spec.content_json or {}).get("_generation_progress")
+            )
+            if not has_partial:
+                spec.content_json = None
+            spec.status = TaskSpecStatus.pending
+            spec.generation_task_id = None
+        elif spec.status in (TaskSpecStatus.pending, TaskSpecStatus.generating):
+            spec.status = TaskSpecStatus.pending
+        await db.commit()
+        await db.refresh(spec)
+    elif spec is not None:
+        spec.deleted_at = None
+        spec.status = TaskSpecStatus.pending
+        spec.content_json = None
+        spec.generation_task_id = None
+        await db.commit()
+        await db.refresh(spec)
+    else:
+        spec = TaskSpec(
+            task_id=task_id,
+            status=TaskSpecStatus.pending,
+            content_json=None,
+        )
+        db.add(spec)
+        await db.commit()
+        await db.refresh(spec)
+
+    celery_task = generate_spec_task.delay(
+        str(spec.id),
+        model_provider=model_provider,
+        model_id=model_id,
+    )
+    spec.generation_task_id = celery_task.id
+    await db.commit()
+
+    return {
+        "spec_id": str(spec.id),
+        "task_id": str(task_id),
+        "task_id_celery": celery_task.id,
+    }
+
+
 @router.post("/generate", status_code=status.HTTP_202_ACCEPTED)
 async def generate_spec(
     body: SpecGenerateRequest,
@@ -55,46 +123,42 @@ async def generate_spec(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    existing_result = await db.execute(
-        select(TaskSpec).where(
-            TaskSpec.task_id == body.task_id,
-            TaskSpec.deleted_at.is_(None),
-        )
-    )
-    existing_spec = existing_result.scalar_one_or_none()
-    if existing_spec is not None:
-        if existing_spec.status == TaskSpecStatus.failed:
-            # Auto-replace failed specs — soft-delete and regenerate
-            existing_spec.deleted_at = datetime.now(timezone.utc)
-            await db.commit()
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="Spec already exists for this task. Use regenerate to replace it.",
-            )
-
-    task_spec = TaskSpec(
-        task_id=body.task_id,
-        status=TaskSpecStatus.pending,
-        content_json=None,
-    )
-    db.add(task_spec)
-    await db.commit()
-    await db.refresh(task_spec)
-
-    celery_task = generate_spec_task.delay(
-        str(task_spec.id),
+    return await _queue_spec_generation(
+        db,
+        body.task_id,
+        replace=False,
         model_provider=model_provider,
         model_id=model_id,
     )
-    task_spec.generation_task_id = celery_task.id
-    await db.commit()
 
-    return {
-        "spec_id": str(task_spec.id),
-        "task_id": str(body.task_id),
-        "task_id_celery": celery_task.id,
-    }
+
+@router.post("/regenerate", status_code=status.HTTP_202_ACCEPTED)
+async def regenerate_spec_by_task(
+    body: SpecRegenerateRequest,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> dict[str, str]:
+    """Soft-delete existing spec and queue a fresh generation for a task."""
+    task_result = await db.execute(
+        select(Task).where(
+            Task.id == body.task_id,
+            Task.deleted_at.is_(None),
+        )
+    )
+    if task_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    payload = await _queue_spec_generation(
+        db,
+        body.task_id,
+        replace=True,
+        model_provider=model_provider,
+        model_id=model_id,
+    )
+    payload["status"] = "regenerating"
+    return payload
 
 
 @router.get("/{spec_id}", response_model=TaskSpecResponse)
@@ -165,6 +229,51 @@ async def assign_spec(
         link=f"/tasks?spec={spec.id}",
     )
     return _to_spec_response(spec)
+
+
+@router.patch("/{spec_id}", response_model=TaskSpecResponse)
+async def update_spec(
+    spec_id: UUID,
+    body: SpecUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> TaskSpecResponse:
+    """Update spec content (manual edits to the generated spec)."""
+    result = await db.execute(
+        select(TaskSpec).where(
+            TaskSpec.id == spec_id,
+            TaskSpec.deleted_at.is_(None),
+        )
+    )
+    spec = result.scalar_one_or_none()
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Spec not found")
+
+    spec.content_json = body.content_json
+    await db.commit()
+    await db.refresh(spec)
+    return _to_spec_response(spec)
+
+
+@router.delete("/{spec_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_spec(
+    spec_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> None:
+    """Soft-delete a spec so a fresh one can be generated."""
+    result = await db.execute(
+        select(TaskSpec).where(
+            TaskSpec.id == spec_id,
+            TaskSpec.deleted_at.is_(None),
+        )
+    )
+    spec = result.scalar_one_or_none()
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Spec not found")
+
+    spec.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
 
 
 @router.post("/{spec_id}/regenerate", status_code=status.HTTP_202_ACCEPTED)

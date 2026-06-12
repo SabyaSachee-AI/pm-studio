@@ -28,6 +28,29 @@ class ProviderStatus(BaseModel):
     configured: bool
     is_enabled: bool
     masked_key: str | None = None
+    label: str = ""
+    signup_url: str | None = None
+    note: str | None = None
+    default_tier: str = "free"
+
+
+class ModelCatalogEntry(BaseModel):
+    provider: str
+    model: str
+    label: str
+    tier: str
+    cost: str = ""
+    context: str = ""
+    note: str = ""
+    task_types: list[str] = Field(default_factory=list)
+    in_routing: bool = False
+    available: bool = False
+
+
+class TierModelCatalog(BaseModel):
+    free: list[ModelCatalogEntry] = Field(default_factory=list)
+    low_cost: list[ModelCatalogEntry] = Field(default_factory=list)
+    premium: list[ModelCatalogEntry] = Field(default_factory=list)
 
 
 class ProviderUsage(BaseModel):
@@ -57,6 +80,17 @@ class ScreenModelInfo(BaseModel):
     source: str
 
 
+class ModelOption(BaseModel):
+    provider: str
+    model: str
+    label: str
+    tier: str = ""
+    cost: str = ""
+    context: str = ""
+    available: bool = False
+    group: str = ""
+
+
 class AiConfigResponse(BaseModel):
     ai_tier: str
     free_mode_enabled: bool
@@ -66,7 +100,9 @@ class AiConfigResponse(BaseModel):
     low_cost_routing: list[RoutingRow] = Field(default_factory=list)
     screen_overrides: dict[str, dict[str, str]]
     screen_models: list[ScreenModelInfo] = Field(default_factory=list)
-    paid_model_options: list[dict[str, str]] = Field(default_factory=list)
-    free_model_options: list[dict[str, str]] = Field(default_factory=list)
-    low_cost_model_options: list[dict[str, str]] = Field(default_factory=list)
+    paid_model_options: list[ModelOption] = Field(default_factory=list)
+    free_model_options: list[ModelOption] = Field(default_factory=list)
+    low_cost_model_options: list[ModelOption] = Field(default_factory=list)
     daily_usage: dict[str, ProviderUsage] = Field(default_factory=dict)
+    model_catalog: TierModelCatalog = Field(default_factory=TierModelCatalog)
+    configured_model_catalog: TierModelCatalog = Field(default_factory=TierModelCatalog)

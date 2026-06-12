@@ -13,7 +13,7 @@ const PROCESSING_MESSAGES: Record<string, string> = {
   "Generating PRD": "Writing product requirements...",
   "Generating SRS": "Writing technical specifications...",
   "Generating architecture": "Building 6 architecture documents...",
-  "Extracting modules": "Breaking down features into tasks...",
+  "Extracting modules": "Breaking SRS into Kanban tasks...",
   "Generating spec": "Writing technical task specification...",
 };
 

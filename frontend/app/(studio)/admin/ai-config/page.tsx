@@ -9,18 +9,15 @@ import {
   type AiConfigResponse,
   type AiProviderStatus,
   type AiTier,
+  type ModelCatalogEntry,
   type ProviderUsage,
+  type TierModelCatalog,
 } from "@/lib/api";
 
-const PROVIDER_LABELS: Record<string, string> = {
-  anthropic: "Anthropic (Claude)",
-  openai: "OpenAI (GPT)",
-  openrouter: "OpenRouter",
-  groq: "Groq ⚡",
-  gemini: "Google Gemini",
-  cerebras: "Cerebras",
-  deepseek: "DeepSeek",
-  together: "Together AI",
+const TIER_BADGE: Record<string, string> = {
+  free: "🆓",
+  low_cost: "💰",
+  premium: "💳",
 };
 
 const TIER_CARDS: {
@@ -36,8 +33,8 @@ const TIER_CARDS: {
     name: "Free mode",
     summary: "$0 per project",
     details: [
-      "Gemini + OpenRouter + Groq + Cerebras chains",
-      "15-model fallback per task",
+      "15 providers: Gemini, OpenRouter, Groq, SiliconFlow, HF, GitHub…",
+      "Up to 20-model fallback per task",
       "Best for dev and testing",
     ],
   },
@@ -47,9 +44,9 @@ const TIER_CARDS: {
     name: "Low cost mode",
     summary: "~$0.05–0.15 per project",
     details: [
-      "DeepSeek V3 primary (~$0.14/1M tokens)",
-      "Together 70B Turbo fallback",
-      "Free models as backup",
+      "DeepSeek + AIML API + Alibaba Qwen primary",
+      "Together / AIML as fast paid backup",
+      "Full free pool as zero-cost fallback",
     ],
   },
   {
@@ -98,23 +95,41 @@ function ProviderCard({
           : "border-gray-700 bg-gray-900"
       }`}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h3 className="font-medium">
-          {PROVIDER_LABELS[provider.provider] ?? provider.provider}
+          {provider.label ?? provider.provider}
+          {provider.default_tier ? (
+            <span className="ml-2 text-xs text-gray-500">
+              {TIER_BADGE[provider.default_tier] ?? ""} {provider.default_tier}
+            </span>
+          ) : null}
         </h3>
         <span
-          className={`text-xs ${
+          className={`shrink-0 text-xs ${
             provider.configured ? "text-green-400" : "text-gray-500"
           }`}
         >
           {provider.configured ? "● CONFIGURED" : "○ NOT SET"}
         </span>
       </div>
+      {provider.note ? (
+        <p className="mt-1 text-xs text-gray-500">{provider.note}</p>
+      ) : null}
       {provider.masked_key && !editing ? (
         <p className="mt-2 text-sm text-gray-400">API Key: {provider.masked_key}</p>
       ) : null}
       {!disabled && (
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex flex-wrap gap-2">
+          {provider.signup_url ? (
+            <a
+              href={provider.signup_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-blue-400 hover:bg-gray-800"
+            >
+              Get API key ↗
+            </a>
+          ) : null}
           {editing ? (
             <>
               <input
@@ -207,6 +222,151 @@ function RoutingTable({
   );
 }
 
+type CatalogView = "all" | "configured";
+type CatalogTier = "free" | "low_cost" | "premium";
+
+const CATALOG_TIER_TABS: { id: CatalogTier; label: string; color: string }[] = [
+  { id: "free", label: "Free", color: "text-green-400" },
+  { id: "low_cost", label: "Low cost", color: "text-amber-400" },
+  { id: "premium", label: "Paid", color: "text-orange-400" },
+];
+
+function ModelCatalogTable({ models }: { models: ModelCatalogEntry[] }) {
+  if (models.length === 0) {
+    return (
+      <p className="px-4 py-6 text-sm text-gray-500">
+        No models in this category for the selected view.
+      </p>
+    );
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead className="border-b border-gray-800 bg-gray-950 text-xs uppercase text-gray-500">
+          <tr>
+            <th className="px-4 py-3">Model</th>
+            <th className="px-4 py-3">Provider</th>
+            <th className="px-4 py-3">Context</th>
+            <th className="px-4 py-3">Cost</th>
+            <th className="px-4 py-3">Routing</th>
+            <th className="px-4 py-3">Key</th>
+          </tr>
+        </thead>
+        <tbody>
+          {models.map((m) => (
+            <tr
+              key={`${m.provider}-${m.model}`}
+              className="border-b border-gray-800/60"
+            >
+              <td className="px-4 py-2.5 font-medium">{m.label}</td>
+              <td className="px-4 py-2.5 text-gray-400">{m.provider}</td>
+              <td className="px-4 py-2.5 text-gray-400">{m.context || "—"}</td>
+              <td className="px-4 py-2.5">{m.cost || "—"}</td>
+              <td className="px-4 py-2.5">
+                {m.in_routing ? (
+                  <span className="text-xs text-blue-400">
+                    {m.task_types.length > 0
+                      ? m.task_types.slice(0, 2).join(", ") +
+                        (m.task_types.length > 2
+                          ? ` +${m.task_types.length - 2}`
+                          : "")
+                      : "Yes"}
+                  </span>
+                ) : (
+                  <span className="text-gray-600">—</span>
+                )}
+              </td>
+              <td className="px-4 py-2.5">
+                {m.available ? (
+                  <span className="text-green-400">● Ready</span>
+                ) : (
+                  <span className="text-gray-600">○ No key</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ModelCatalogSection({
+  catalog,
+  configuredCatalog,
+}: {
+  catalog: TierModelCatalog;
+  configuredCatalog: TierModelCatalog;
+}) {
+  const [view, setView] = useState<CatalogView>("configured");
+  const [tierTab, setTierTab] = useState<CatalogTier>("free");
+
+  const activeCatalog = view === "configured" ? configuredCatalog : catalog;
+  const models = activeCatalog[tierTab] ?? [];
+  const counts = {
+    free: activeCatalog.free?.length ?? 0,
+    low_cost: activeCatalog.low_cost?.length ?? 0,
+    premium: activeCatalog.premium?.length ?? 0,
+  };
+  const total = counts.free + counts.low_cost + counts.premium;
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-medium">Model catalog</h2>
+          <p className="text-sm text-gray-500">
+            {total} models across free, low cost, and paid tiers
+          </p>
+        </div>
+        <div className="flex rounded-lg border border-gray-700 p-1">
+          {(
+            [
+              ["all", "All PM Studio models"],
+              ["configured", "Configured providers only"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setView(id)}
+              className={`rounded-md px-3 py-1.5 text-xs ${
+                view === id
+                  ? "bg-gray-800 text-white"
+                  : "text-gray-400 hover:text-gray-200"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {CATALOG_TIER_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setTierTab(tab.id)}
+            className={`rounded-lg border px-4 py-2 text-sm ${
+              tierTab === tab.id
+                ? "border-gray-600 bg-gray-800"
+                : "border-gray-800 bg-gray-950 hover:border-gray-700"
+            }`}
+          >
+            <span className={tab.color}>{tab.label}</span>
+            <span className="ml-2 text-gray-500">({counts[tab.id]})</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="rounded-xl border border-gray-800">
+        <ModelCatalogTable models={models} />
+      </div>
+    </section>
+  );
+}
+
 type ConfigTab = "guide" | "settings";
 
 export default function AiConfigPage() {
@@ -273,8 +433,7 @@ export default function AiConfigPage() {
       : tier === "low_cost"
         ? config.low_cost_routing
         : config.paid_routing;
-
-  const premiumProvidersDisabled = tier !== "premium";
+  const configuredCount = config.providers.filter((p) => p.configured).length;
 
   return (
     <div className="mx-auto max-w-5xl space-y-8">
@@ -326,6 +485,13 @@ export default function AiConfigPage() {
 
       {activeTab === "settings" ? (
         <>
+      {configuredCount > 0 ? (
+        <p className="rounded-lg border border-green-800/60 bg-green-950/30 px-4 py-2 text-sm text-green-300">
+          {configuredCount} of {config.providers.length} providers configured — fallback
+          chains and model dropdowns use all keys you added.
+        </p>
+      ) : null}
+
       <section className="rounded-xl border border-gray-700 bg-gray-900 p-6">
         <h2 className="mb-4 text-lg font-medium">Cost tier</h2>
         <div className="grid gap-4 md:grid-cols-3">
@@ -378,18 +544,15 @@ export default function AiConfigPage() {
       <section className="space-y-4">
         <h2 className="text-lg font-medium">Provider API keys</h2>
         <p className="text-sm text-gray-500">
-          {tier === "premium"
-            ? "Anthropic or OpenAI required for premium tier."
-            : tier === "low_cost"
-              ? "DeepSeek + optional Together for low cost. Free providers as fallback."
-              : "OpenRouter required. Add Groq, Gemini, Cerebras for longer fallback chains."}
+          Add keys for any provider to expand your fallback chain. Free-tier providers
+          (OpenRouter, Gemini, Groq, Hugging Face, SiliconFlow, GitHub Models, etc.)
+          cost $0. Low-cost providers (DeepSeek, AIML API, Together) start around
+          $0.14/1M tokens. Premium uses Anthropic or OpenAI.
         </p>
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {config.providers.map((p) => {
             const isPremiumOnly = ["anthropic", "openai"].includes(p.provider);
-            const disabled =
-              (premiumProvidersDisabled && isPremiumOnly) ||
-              (tier === "free" && isPremiumOnly);
+            const disabled = tier !== "premium" && isPremiumOnly;
             return (
               <ProviderCard
                 key={p.provider}
@@ -402,6 +565,13 @@ export default function AiConfigPage() {
         </div>
       </section>
 
+      {config.model_catalog ? (
+        <ModelCatalogSection
+          catalog={config.model_catalog}
+          configuredCatalog={config.configured_model_catalog}
+        />
+      ) : null}
+
       <section className="space-y-3">
         <h2 className="text-lg font-medium">
           {tier === "free"
@@ -413,8 +583,9 @@ export default function AiConfigPage() {
         <RoutingTable rows={routingRows} showFallback={tier !== "premium"} />
         {tier !== "premium" ? (
           <p className="text-sm text-amber-400/90">
-            Up to 15 models per task. Rate limited? PM Studio switches to the next model in ~1
-            second. Architecture docs get 12 min per model before timeout.
+            Up to 20 models per task across 15 providers. Rate limited? PM Studio
+            switches to the next model in ~1 second. Architecture docs get 12 min per
+            model before timeout.
           </p>
         ) : null}
       </section>

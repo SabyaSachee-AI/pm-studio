@@ -3,7 +3,7 @@
 import fitz
 
 from app.schemas.requirement import RequirementAnalysisSchema
-from app.services.ai.base import ai_call
+from app.services.ai.chunker import chunked_analysis
 
 
 def extract_text_from_pdf(file_path: str) -> str:
@@ -17,23 +17,9 @@ def extract_text_from_pdf(file_path: str) -> str:
 
 
 async def analyze_requirements_ai(text: str) -> RequirementAnalysisSchema:
-    """Analyze extracted text using Claude via ai_call."""
-    truncated_text = text[:10000]
-    prompt = f"""
-    Analyze the following software project requirements document.
-    Identify the project type, gaps, risks, technical questions, and missing non-functional requirements.
+    """Analyse full requirement text — no truncation.
 
-    Document Text:
-    {truncated_text}
+    Uses chunked_analysis so any-size PDF is processed completely,
+    even when the active model chain includes 8K-context free models.
     """
-
-    system = "You are an expert software business analyst. Return strictly structured JSON."
-
-    result = await ai_call(
-        prompt=prompt,
-        response_model=RequirementAnalysisSchema,
-        system=system,
-        task_type="req_analyze",
-        screen="requirements",
-    )
-    return result
+    return await chunked_analysis(text)
