@@ -59,6 +59,10 @@ class Settings(BaseSettings):
         default=None,
         description="OpenAI API key used as a fallback (optional).",
     )
+    openrouter_api_key: str | None = Field(
+        default=None,
+        description="OpenRouter API key for free-tier model routing (optional).",
+    )
     groq_api_key: str | None = Field(
         default=None,
         description="Groq API key — fast free LPU inference, 14,400 req/day (optional).",

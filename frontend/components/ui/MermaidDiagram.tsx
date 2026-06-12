@@ -36,6 +36,7 @@ export function MermaidDiagram({ chart, id }: { chart: string; id: string }) {
         if (!cancelled && ref.current) {
           ref.current.innerHTML = svg;
           ref.current.classList.add("mermaid-container");
+          ref.current.setAttribute("data-diagram-id", id);
         }
       })
       .catch(() => {

@@ -148,4 +148,6 @@ Every task is independently implementable and maps to a specific file."""
         response_model=ModuleListSchema,
         system=system,
         max_tokens=12000,
+        task_type="module_extract",
+        screen="tasks",
     )

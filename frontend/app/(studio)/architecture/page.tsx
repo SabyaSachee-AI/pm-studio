@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AiStatusBar } from "@/components/ui/AiStatusBar";
 import { Button } from "@/components/ui/button";
+import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
 import { Toast } from "@/components/ui/Toast";
 import {
   api,
@@ -135,6 +136,8 @@ export default function ArchitectureListPage() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Architecture suite</h1>
+        <div className="flex flex-wrap items-center gap-2">
+        <ScreenModelSelector screen="architecture" />
         <select
           className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
           value={projectId}
@@ -146,6 +149,7 @@ export default function ArchitectureListPage() {
             </option>
           ))}
         </select>
+        </div>
       </div>
 
       <div className="rounded-xl border border-gray-800 bg-gray-900 p-6">

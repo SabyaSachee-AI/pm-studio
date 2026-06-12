@@ -52,5 +52,7 @@ Return strictly structured JSON matching the schema exactly."""
         response_model=PRDSchema,
         system=system,
         max_tokens=8000,
+        task_type="prd_generate",
+        screen="prds",
     )
     return result

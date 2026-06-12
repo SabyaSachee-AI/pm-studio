@@ -7,6 +7,7 @@ import { ArchitectureDocView } from "@/components/features/architecture/Architec
 import type { ArchDocKey } from "@/components/features/architecture/ArchitecturePrintDocument";
 import { AiStatusBar } from "@/components/ui/AiStatusBar";
 import { Button } from "@/components/ui/button";
+import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
 import { Toast } from "@/components/ui/Toast";
 import { api, type Architecture, type Project } from "@/lib/api";
 import { exportArchitecturePdf } from "@/lib/architecturePdfExport";
@@ -185,7 +186,8 @@ export default function ArchitectureDetailPage() {
           </p>
         </div>
 
-        <div className="no-print flex flex-wrap gap-2">
+        <div className="no-print flex flex-wrap items-center gap-2">
+          <ScreenModelSelector screen="architecture" />
           <Button
             variant="outline"
             disabled={pdfExporting}

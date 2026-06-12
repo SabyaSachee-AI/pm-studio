@@ -148,5 +148,7 @@ diagram_name -> mermaid source string.
         response_model=ArchitectureDocSchema,
         system=system,
         max_tokens=8000,
+        task_type="arch_single_doc",
+        screen="architecture",
     )
     return _sanitize_doc_diagrams(result)

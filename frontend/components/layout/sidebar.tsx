@@ -17,6 +17,7 @@ const NAV_ITEMS = [
   { href: "/knowledge", screen: "knowledge_base", label: "Knowledge" },
   { href: "/decisions", screen: "decisions", label: "Decisions" },
   { href: "/admin/users", screen: "admin_users", label: "Users" },
+  { href: "/admin/ai-config", screen: "admin_users", label: "AI config" },
 ];
 
 export function Sidebar() {

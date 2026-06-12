@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
 import { api, type PRD, type Project, type Requirement } from "@/lib/api";
 
 export default function PrdsPage() {
@@ -43,7 +44,10 @@ export default function PrdsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">PRDs</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">PRDs</h1>
+        <ScreenModelSelector screen="prds" />
+      </div>
       <div className="flex flex-wrap gap-2">
         <select
           className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"

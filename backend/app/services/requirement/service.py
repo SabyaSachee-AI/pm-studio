@@ -33,5 +33,7 @@ async def analyze_requirements_ai(text: str) -> RequirementAnalysisSchema:
         prompt=prompt,
         response_model=RequirementAnalysisSchema,
         system=system,
+        task_type="req_analyze",
+        screen="requirements",
     )
     return result

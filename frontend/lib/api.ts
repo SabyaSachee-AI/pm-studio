@@ -223,6 +223,49 @@ export interface Notification {
   created_at: string;
 }
 
+export interface AiProviderStatus {
+  provider: string;
+  configured: boolean;
+  is_enabled: boolean;
+  masked_key: string | null;
+}
+
+export interface AiRoutingRow {
+  task_type: string;
+  task_label: string;
+  quality_stars: number;
+  primary_model: string;
+  fallback_chain: string;
+  quality_note: string | null;
+}
+
+export interface ScreenModelInfo {
+  screen: string;
+  provider: string;
+  model: string;
+  label: string;
+  source: string;
+}
+
+export interface AiModelOption {
+  provider: string;
+  model: string;
+  label: string;
+  tier: string;
+  cost: string;
+}
+
+export interface AiConfigResponse {
+  free_mode_enabled: boolean;
+  providers: AiProviderStatus[];
+  paid_routing: AiRoutingRow[];
+  free_routing: AiRoutingRow[];
+  screen_overrides: Record<string, { provider: string; model: string }>;
+  screen_models: ScreenModelInfo[];
+  paid_model_options: AiModelOption[];
+  free_model_options: AiModelOption[];
+}
+
 export class ApiClient {
   private readonly baseUrl: string;
   private sessionActive = false;
@@ -669,6 +712,47 @@ export class ApiClient {
   }
   async markAllNotificationsRead(): Promise<void> {
     return this.request("/notifications/read-all", { method: "POST" });
+  }
+
+  // AI configuration
+  async getAiConfig(): Promise<AiConfigResponse> {
+    return this.request("/admin/ai-config");
+  }
+  async getAiConfigForScreens(): Promise<AiConfigResponse> {
+    return this.request("/admin/ai-config/screen");
+  }
+  async setFreeMode(enabled: boolean): Promise<AiConfigResponse> {
+    return this.request("/admin/ai-config/free-mode", {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    });
+  }
+  async useAllFree(): Promise<AiConfigResponse> {
+    return this.request("/admin/ai-config/use-all-free", { method: "POST" });
+  }
+  async setScreenModelOverride(
+    screen: string,
+    provider: string | null,
+    model: string | null,
+  ): Promise<AiConfigResponse> {
+    return this.request("/admin/ai-config/screen-override", {
+      method: "PATCH",
+      body: JSON.stringify({ screen, provider, model }),
+    });
+  }
+  async updateAiProvider(
+    provider: string,
+    apiKey?: string,
+    isEnabled?: boolean,
+  ): Promise<AiConfigResponse> {
+    return this.request("/admin/ai-config/provider", {
+      method: "PATCH",
+      body: JSON.stringify({
+        provider,
+        api_key: apiKey,
+        is_enabled: isEnabled,
+      }),
+    });
   }
 
   // Users (admin)

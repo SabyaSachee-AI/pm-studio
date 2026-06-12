@@ -60,5 +60,7 @@ Return strictly structured JSON."""
         response_model=TaskSpecSchema,
         system=system,
         max_tokens=16000,
+        task_type="spec_generate",
+        screen="tasks",
     )
     return result

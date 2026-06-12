@@ -63,5 +63,7 @@ Return strictly structured JSON matching the schema exactly."""
         response_model=SRSSchema,
         system=system,
         max_tokens=16000,
+        task_type="srs_generate",
+        screen="srs",
     )
     return result

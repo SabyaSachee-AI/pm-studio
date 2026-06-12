@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.api.v1.admin.ai_config.router import router as admin_ai_config_router
 from app.api.v1.architecture.router import router as architecture_router
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.clients.router import router as clients_router
@@ -37,4 +38,5 @@ api_router.include_router(knowledge_router)
 api_router.include_router(decisions_router)
 api_router.include_router(notifications_router)
 api_router.include_router(users_router)
+api_router.include_router(admin_ai_config_router)
 api_router.include_router(documents_router)

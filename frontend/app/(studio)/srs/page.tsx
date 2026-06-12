@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
 import { api, type PRD, type Project, type SRS } from "@/lib/api";
 
 export default function SrsPage() {
@@ -44,7 +45,10 @@ export default function SrsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">SRS documents</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold">SRS documents</h1>
+        <ScreenModelSelector screen="srs" />
+      </div>
       <div className="flex flex-wrap gap-2">
         <select
           className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
