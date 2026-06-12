@@ -56,9 +56,14 @@ export default function TasksPage() {
   }, [projectId, loadBoard]);
 
   async function handleExtractModules() {
-    const approved = srsList.find((s) => s.status === "approved");
+    const ELIGIBLE = ["approved", "finalized", "confirmed"];
+    const approved = srsList.find(
+      (s) =>
+        ELIGIBLE.includes(s.status) ||
+        ELIGIBLE.includes((s as SRS & { workflow_status?: string }).workflow_status ?? ""),
+    );
     if (!approved) {
-      alert("Approve an SRS before extracting modules.");
+      alert("No eligible SRS found. The SRS must be approved or finalized before generating tasks.");
       return;
     }
     setLoading(true);

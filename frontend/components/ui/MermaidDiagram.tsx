@@ -1,0 +1,58 @@
+"use client";
+
+import mermaid from "mermaid";
+import { useEffect, useId, useRef } from "react";
+import { sanitizeMermaid } from "@/lib/mermaidSanitize";
+
+let initialized = false;
+
+function ensureMermaid(): void {
+  if (initialized) return;
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: "dark",
+    securityLevel: "loose",
+    er: { diagramPadding: 20 },
+    flowchart: { curve: "basis", htmlLabels: true },
+  });
+  initialized = true;
+}
+
+export function MermaidDiagram({ chart, id }: { chart: string; id: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const reactId = useId().replace(/:/g, "");
+  const renderId = `mermaid-${id}-${reactId}`;
+
+  useEffect(() => {
+    if (!ref.current || !chart) return;
+    let cancelled = false;
+    const sanitized = sanitizeMermaid(chart);
+    if (!sanitized) return;
+
+    ensureMermaid();
+    mermaid
+      .render(renderId, sanitized)
+      .then(({ svg }) => {
+        if (!cancelled && ref.current) {
+          ref.current.innerHTML = svg;
+          ref.current.classList.add("mermaid-container");
+        }
+      })
+      .catch(() => {
+        if (!cancelled && ref.current) {
+          ref.current.innerHTML = `<pre class="text-xs text-red-400 overflow-x-auto p-2">${sanitized}</pre>`;
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chart, renderId]);
+
+  return (
+    <div
+      ref={ref}
+      className="overflow-x-auto rounded-lg border border-gray-800 bg-gray-950 p-4"
+    />
+  );
+}

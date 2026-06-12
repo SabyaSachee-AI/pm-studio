@@ -84,6 +84,58 @@ export interface SRS {
   updated_at: string;
 }
 
+export interface Architecture {
+  id: string;
+  project_id: string;
+  srs_id: string;
+  status: string;
+  version: number;
+  display_name?: string | null;
+  created_by_id: string;
+  confirmed_by_id?: string | null;
+  confirmed_at?: string | null;
+  generation_task_id?: string | null;
+  doc_task_ids?: Record<string, string> | null;
+  generation_progress?: Record<string, unknown> | null;
+  doc_cancel_flags?: Record<string, boolean> | null;
+  can_resume?: boolean;
+  last_error?: string | null;
+  resume_from?: string | null;
+  suite_canon?: Record<string, unknown> | null;
+  consistency_report?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+  doc_system_arch?: Record<string, unknown> | null;
+  doc_database?: Record<string, unknown> | null;
+  doc_api?: Record<string, unknown> | null;
+  doc_frontend?: Record<string, unknown> | null;
+  doc_security?: Record<string, unknown> | null;
+  doc_uiux?: Record<string, unknown> | null;
+  doc_system_arch_status?: string | null;
+  doc_database_status?: string | null;
+  doc_api_status?: string | null;
+  doc_frontend_status?: string | null;
+  doc_security_status?: string | null;
+  doc_uiux_status?: string | null;
+}
+
+export interface ArchitectureListItem {
+  id: string;
+  project_id: string;
+  srs_id: string;
+  status: string;
+  version: number;
+  display_name?: string | null;
+  created_at: string;
+  updated_at: string;
+  doc_system_arch_status?: string | null;
+  doc_database_status?: string | null;
+  doc_api_status?: string | null;
+  doc_frontend_status?: string | null;
+  doc_security_status?: string | null;
+  doc_uiux_status?: string | null;
+}
+
 export interface ScreenPermission {
   screen_key: string;
   can_view: boolean;
@@ -102,8 +154,14 @@ export interface KanbanTask {
   assigned_to_id: string | null;
   effort_hours: number | null;
   fr_references: string[] | null;
+  linked_fr: string | null;
   module_name: string | null;
   order_index: number;
+  suggested_file: string | null;
+  suggested_endpoint: string | null;
+  suggested_table: string | null;
+  spec_id: string | null;
+  spec_status: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -418,6 +476,85 @@ export class ApiClient {
     return `${this.baseUrl}/documents/srs/${id}/export-pdf/sync`;
   }
 
+  // Architecture
+  async generateArchitecture(projectId: string, srsId: string) {
+    return this.request<{
+      architecture_id: string;
+      task_id: string;
+      status: string;
+    }>("/architecture/generate", {
+      method: "POST",
+      body: JSON.stringify({ project_id: projectId, srs_id: srsId }),
+    });
+  }
+  async listArchitectures(projectId: string): Promise<ArchitectureListItem[]> {
+    return this.request(`/architecture/project/${projectId}`);
+  }
+  async getArchitecture(id: string): Promise<Architecture> {
+    return this.request(`/architecture/${id}`);
+  }
+  async confirmArchitecture(id: string): Promise<Architecture> {
+    return this.request(`/architecture/${id}/confirm`, { method: "PATCH" });
+  }
+  async finalizeArchitecture(id: string): Promise<Architecture> {
+    return this.request(`/architecture/${id}/finalize`, { method: "PATCH" });
+  }
+  async resumeArchitecture(id: string) {
+    return this.request<{ architecture_id: string; task_id: string; status: string }>(
+      `/architecture/${id}/resume`,
+      { method: "POST" },
+    );
+  }
+  async regenerateArchitecture(id: string) {
+    return this.request<{ architecture_id: string; task_id: string; status: string }>(
+      `/architecture/${id}/regenerate`,
+      { method: "POST" },
+    );
+  }
+  async generateArchitectureDoc(id: string, docKey: string) {
+    return this.request<{ task_id: string; doc_key: string; status: string }>(
+      `/architecture/${id}/generate-doc`,
+      { method: "POST", body: JSON.stringify({ doc_key: docKey }) },
+    );
+  }
+  async regenerateArchitectureDoc(
+    id: string,
+    docKey: string,
+    instructions = "",
+  ): Promise<{ task_id: string; doc_key: string; status: string }> {
+    return this.request(`/architecture/${id}/regenerate-doc`, {
+      method: "POST",
+      body: JSON.stringify({ doc_key: docKey, instructions }),
+    });
+  }
+  async cancelArchitectureGeneration(id: string) {
+    return this.request<{ status: string }>(`/architecture/${id}/cancel`, {
+      method: "POST",
+    });
+  }
+  async cancelArchitectureDoc(id: string, docKey: string) {
+    return this.request<{ status: string; doc_key: string }>(
+      `/architecture/${id}/cancel-doc/${docKey}`,
+      { method: "POST" },
+    );
+  }
+  async clearArchitectureDoc(id: string, docKey: string): Promise<Architecture> {
+    return this.request(`/architecture/${id}/doc/${docKey}`, { method: "DELETE" });
+  }
+  async saveArchitectureDoc(
+    id: string,
+    docKey: string,
+    content: Record<string, unknown>,
+  ): Promise<Architecture> {
+    return this.request(`/architecture/${id}/doc/${docKey}/save`, {
+      method: "PATCH",
+      body: JSON.stringify({ doc_key: docKey, content }),
+    });
+  }
+  async deleteArchitecture(id: string): Promise<void> {
+    return this.request(`/architecture/${id}`, { method: "DELETE" });
+  }
+
   // Kanban tasks
   async getKanban(projectId: string): Promise<KanbanBoard> {
     return this.request(`/tasks/kanban/${projectId}`);
@@ -431,10 +568,43 @@ export class ApiClient {
       body: JSON.stringify({ status, note }),
     });
   }
-  async extractModules(projectId: string, srsId: string) {
-    return this.request<{ task_id: string; status: string }>("/tasks/extract-modules", {
+  async updateTask(taskId: string, body: Partial<KanbanTask>) {
+    return this.request<KanbanTask>(`/tasks/${taskId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
+  async extractModules(
+    projectId: string,
+    srsId: string,
+    options: { replace_existing?: boolean; fill_gaps_only?: boolean } = {},
+  ) {
+    return this.request<{ task_id: string; status: string; warning?: string }>("/tasks/extract-modules", {
       method: "POST",
-      body: JSON.stringify({ project_id: projectId, srs_id: srsId }),
+      body: JSON.stringify({ project_id: projectId, srs_id: srsId, ...options }),
+    });
+  }
+  async getTaskCoverage(projectId: string) {
+    return this.request<{
+      total_frs: number;
+      covered_frs: number;
+      missing_frs: string[];
+      total_tasks: number;
+      tasks_with_spec: number;
+      tasks_done: number;
+      has_tasks: boolean;
+      all_done: boolean;
+      coverage_pct: number;
+    }>(`/tasks/coverage/${projectId}`);
+  }
+  async generateOrchestration(projectId: string) {
+    return this.request<{ task_id: string; status: string }>(`/tasks/orchestration/${projectId}`, {
+      method: "POST",
+    });
+  }
+  async clearBoardTasks(projectId: string) {
+    return this.request<{ deleted_tasks: number; deleted_specs: number }>(`/tasks/clear/${projectId}`, {
+      method: "DELETE",
     });
   }
 

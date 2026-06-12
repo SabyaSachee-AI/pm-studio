@@ -21,6 +21,9 @@ async def get_job_status(task_id: str) -> dict:
         response["result"] = result.result
     elif result.status == "FAILURE":
         response["error"] = str(result.result)
+    elif result.status == "PROGRESS":
+        # Return meta so frontend can show current model, doc progress, etc.
+        response["meta"] = result.info or {}
     return response
 
 

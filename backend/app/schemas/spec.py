@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 class TaskSpecSchema(BaseModel):
     task_scope: str
+    implementation_steps: list[str]
     files_to_modify: list[str]
     files_reference_only: list[str]
     backend_requirements: Optional[str] = None
@@ -19,6 +20,7 @@ class TaskSpecSchema(BaseModel):
     strict_rules: list[str]
     expected_output: list[str]
     manual_test_checklist: list[str]
+    cursor_prompt: str
 
 
 class SpecGenerateRequest(BaseModel):

@@ -59,6 +59,26 @@ class Settings(BaseSettings):
         default=None,
         description="OpenAI API key used as a fallback (optional).",
     )
+    groq_api_key: str | None = Field(
+        default=None,
+        description="Groq API key — fast free LPU inference, 14,400 req/day (optional).",
+    )
+    together_api_key: str | None = Field(
+        default=None,
+        description="Together AI API key — GPU inference free tier (optional).",
+    )
+    gemini_api_key: str | None = Field(
+        default=None,
+        description="Google Gemini API key — 1.5K req/day free, 250K TPM (optional).",
+    )
+    cerebras_api_key: str | None = Field(
+        default=None,
+        description="Cerebras API key — 1M tokens/day free, ultra-fast inference (optional).",
+    )
+    deepseek_api_key: str | None = Field(
+        default=None,
+        description="DeepSeek API key — low-cost V3 model ~$0.14/1M tokens (optional).",
+    )
     environment: str = Field(
         default="development",
         description="Runtime environment name (e.g. development, staging, production).",

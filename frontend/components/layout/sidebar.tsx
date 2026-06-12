@@ -12,6 +12,7 @@ const NAV_ITEMS = [
   { href: "/requirements", screen: "requirements", label: "Requirements" },
   { href: "/prds", screen: "prds", label: "PRDs" },
   { href: "/srs", screen: "srs", label: "SRS" },
+  { href: "/architecture", screen: "architecture", label: "Architecture" },
   { href: "/tasks", screen: "tasks", label: "Kanban" },
   { href: "/knowledge", screen: "knowledge_base", label: "Knowledge" },
   { href: "/decisions", screen: "decisions", label: "Decisions" },

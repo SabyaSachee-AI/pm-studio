@@ -1,3 +1,4 @@
+from app.models.architecture import Architecture, ArchitectureStatus
 from app.models.client import Client
 from app.models.decision import Decision
 from app.models.document_version import DocumentVersion, DocumentType
@@ -20,6 +21,8 @@ from app.models.task_status_log import TaskStatusLog
 from app.models.user import User, UserRole
 
 __all__ = [
+    "Architecture",
+    "ArchitectureStatus",
     "Client",
     "Decision",
     "DocumentType",

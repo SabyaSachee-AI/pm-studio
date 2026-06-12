@@ -91,8 +91,12 @@ class Task(TimeStampedModel):
     )
     effort_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     fr_references: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
+    linked_fr: Mapped[str | None] = mapped_column(String(50), nullable=True)
     module_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    suggested_file: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    suggested_endpoint: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    suggested_table: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     project: Mapped["Project"] = relationship("Project")
     assigned_to: Mapped["User | None"] = relationship("User")

@@ -52,17 +52,23 @@ async def generate_spec(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    existing = await db.execute(
+    existing_result = await db.execute(
         select(TaskSpec).where(
             TaskSpec.task_id == body.task_id,
             TaskSpec.deleted_at.is_(None),
         )
     )
-    if existing.scalar_one_or_none() is not None:
-        raise HTTPException(
-            status_code=400,
-            detail="Spec already exists for this task",
-        )
+    existing_spec = existing_result.scalar_one_or_none()
+    if existing_spec is not None:
+        if existing_spec.status == TaskSpecStatus.failed:
+            # Auto-replace failed specs — soft-delete and regenerate
+            existing_spec.deleted_at = datetime.now(timezone.utc)
+            await db.commit()
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Spec already exists for this task. Use regenerate to replace it.",
+            )
 
     task_spec = TaskSpec(
         task_id=body.task_id,

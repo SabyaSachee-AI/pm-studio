@@ -11,7 +11,11 @@ class ExtractedTaskItem(BaseModel):
     description: str = ""
     priority: str = "medium"
     fr_references: list[str] = Field(default_factory=list)
+    linked_fr: Optional[str] = None
     effort_hours: Optional[float] = None
+    suggested_file: Optional[str] = None
+    suggested_endpoint: Optional[str] = None
+    suggested_table: Optional[str] = None
 
 
 class ExtractedModule(BaseModel):
@@ -27,3 +31,5 @@ class ModuleListSchema(BaseModel):
 class ModuleExtractRequest(BaseModel):
     project_id: UUID
     srs_id: UUID
+    replace_existing: bool = False
+    fill_gaps_only: bool = False

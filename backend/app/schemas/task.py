@@ -75,8 +75,14 @@ class TaskResponse(BaseModel):
     assigned_to_id: Optional[UUID]
     effort_hours: Optional[float]
     fr_references: Optional[list]
+    linked_fr: Optional[str]
     module_name: Optional[str]
     order_index: int
+    suggested_file: Optional[str]
+    suggested_endpoint: Optional[str]
+    suggested_table: Optional[str]
+    spec_id: Optional[UUID] = None
+    spec_status: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

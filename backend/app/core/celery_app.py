@@ -24,6 +24,8 @@ celery_app = Celery(
         "app.workers.pdf_tasks",
         "app.workers.spec_tasks",
         "app.workers.module_tasks",
+        "app.workers.architecture_tasks",
+        "app.workers.orchestration_tasks",
     ],
 )
 
