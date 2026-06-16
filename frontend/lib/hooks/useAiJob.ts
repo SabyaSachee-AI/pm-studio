@@ -3,12 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { TaskStatus } from "@/lib/api";
-import {
-  playCompletionChime,
-  playErrorTone,
-  startAmbientLoop,
-  stopAmbientLoop,
-} from "@/lib/sound";
 
 export type AiJobStatus = "idle" | "pending" | "processing" | "completed" | "failed";
 
@@ -157,7 +151,6 @@ export function useAiJob(options: UseAiJobOptions = {}) {
       isManualRef.current = false;
       if (tokens !== undefined) setTokenCount(tokens);
       setStatus("completed");
-      try { stopAmbientLoop(); playCompletionChime(); } catch { /* audio optional */ }
       window.dispatchEvent(new CustomEvent("pm-studio:generating", { detail: { active: false } }));
       onCompleteRef.current?.({
         elapsedSeconds: elapsedRef.current,
@@ -176,7 +169,6 @@ export function useAiJob(options: UseAiJobOptions = {}) {
       isManualRef.current = false;
       setErrorMessage(error);
       setStatus("failed");
-      try { stopAmbientLoop(); playErrorTone(); } catch { /* audio optional */ }
       window.dispatchEvent(new CustomEvent("pm-studio:generating", { detail: { active: false } }));
       onFailedRef.current?.({
         elapsedSeconds: elapsedRef.current,
@@ -243,7 +235,6 @@ export function useAiJob(options: UseAiJobOptions = {}) {
       setErrorMessage(undefined);
       setTaskMeta(null);
       setStatus("pending");
-      try { startAmbientLoop(); } catch { /* audio optional */ }
       window.dispatchEvent(new CustomEvent("pm-studio:generating", { detail: { active: true } }));
       startElapsedTimer();
       startMessageRotation();
@@ -257,7 +248,6 @@ export function useAiJob(options: UseAiJobOptions = {}) {
 
   const reset = useCallback(() => {
     clearTimers();
-    try { stopAmbientLoop(); } catch { /* audio optional */ }
     taskIdRef.current = null;
     isManualRef.current = false;
     setStatus("idle");
@@ -283,7 +273,6 @@ export function useAiJob(options: UseAiJobOptions = {}) {
       setErrorMessage(undefined);
       setTaskMeta(null);
       setStatus("processing");
-      try { startAmbientLoop(); } catch { /* audio optional */ }
       window.dispatchEvent(new CustomEvent("pm-studio:generating", { detail: { active: true } }));
       startElapsedTimer();
       startMessageRotation();

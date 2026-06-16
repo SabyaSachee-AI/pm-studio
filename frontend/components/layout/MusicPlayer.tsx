@@ -15,6 +15,7 @@ const PRESETS = {
   ambient: { label: "Ambient", icon: "ti-leaf",  desc: "Dreamy melody" },
   focus:   { label: "Focus",   icon: "ti-brain", desc: "Lo-fi beat"    },
   lounge:  { label: "Lounge",  icon: "ti-music", desc: "Walking bass"  },
+  bip:     { label: "Bip",     icon: "ti-radar", desc: "Soft pulse"    },
 } as const;
 type Preset = keyof typeof PRESETS;
 type Tab    = "synth" | "local" | "radio";
@@ -105,7 +106,6 @@ export function MusicPlayer({ collapsed }: { collapsed: boolean }) {
   const objUrlRef = useRef<string | null>(null);
   const melodyRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const beatRef   = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pulseRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const dirRef    = useRef<FileSystemDirectoryHandle | null>(null);
   const playlistRef = useRef<File[]>([]);   // mirror of playlist for callbacks
   const trackIdxRef = useRef(0);
@@ -232,6 +232,13 @@ export function MusicPlayer({ collapsed }: { collapsed: boolean }) {
       note(LOUNGE_BASS[i], 0.55, "triangle", 0.13);
       if (i % 4 === 3) { note(LOUNGE_PAD[2], 0.35, "sine", 0.045, -8); note(LOUNGE_PAD[3], 0.35, "sine", 0.038, 6); }
     }, 600);
+  }
+  // Soft recurring bip — the old generation pulse, now a manual play/stop preset.
+  function startBip() {
+    stopPad(); stopSeq(); stopAudioEl();
+    const ping = () => note(185, 0.30, "sine", 0.05);
+    ping();
+    beatRef.current = setInterval(ping, 1800);
   }
 
   // ── LOCAL: play a file by index ─────────────────────────────────────────────
@@ -367,7 +374,10 @@ export function MusicPlayer({ collapsed }: { collapsed: boolean }) {
   function play(nextTab?: Tab, nextPreset?: Preset, nextSid?: string) {
     const t = nextTab ?? tab; const p = nextPreset ?? preset; const s = nextSid ?? stationId;
     if (t === "synth") {
-      if (p === "ambient") startAmbient(); else if (p === "focus") startFocus(); else startLounge();
+      if (p === "ambient") startAmbient();
+      else if (p === "focus") startFocus();
+      else if (p === "lounge") startLounge();
+      else startBip();
       setPreset(p);
     } else if (t === "local") {
       playTrack(playlistRef.current, trackIdxRef.current);
@@ -385,49 +395,18 @@ export function MusicPlayer({ collapsed }: { collapsed: boolean }) {
     }
   }
 
-  // ── Generation pulse & chime ────────────────────────────────────────────────
-  const startPulse = useCallback(() => {
-    if (pulseRef.current) return;
-    pulseRef.current = setInterval(() => {
-      try {
-        const ac = getCtx(); const osc = ac.createOscillator(); const g = ac.createGain(); const now = ac.currentTime;
-        osc.type = "sine"; osc.frequency.value = 185;
-        g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(0.03, now + 0.04); g.gain.linearRampToValueAtTime(0, now + 0.28);
-        osc.connect(g); g.connect(masterRef.current ?? getCtx().destination); osc.start(now); osc.stop(now + 0.32);
-      } catch { /**/ }
-    }, 1800);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const stopPulse = useCallback(() => {
-    if (pulseRef.current) { clearInterval(pulseRef.current); pulseRef.current = null; }
-  }, []);
-
-  const chime = useCallback(() => {
-    try {
-      const ac = getCtx();
-      [261.6, 329.6, 392, 523.2].forEach((freq, i) => {
-        const osc = ac.createOscillator(); const g = ac.createGain(); const t = ac.currentTime + i * 0.11;
-        osc.type = "sine"; osc.frequency.value = freq;
-        g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.13, t + 0.02); g.gain.exponentialRampToValueAtTime(0.001, t + 0.55);
-        osc.connect(g); g.connect(masterRef.current ?? ac.destination); osc.start(t); osc.stop(t + 0.62);
-      });
-    } catch { /**/ }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   useEffect(() => {
     function handler(e: Event) {
       const active = (e as CustomEvent<{ active: boolean }>).detail.active;
+      // No auto ambient or pulse during generation — only update the visual
+      // indicator. The bip is now a manual synth preset (play/stop).
       setGenerating(active);
-      if (active) {
-        startPulse();
-        if (!playing) { startAmbient(); setPlaying(true); setTab("synth"); setPreset("ambient"); }
-      } else { stopPulse(); chime(); }
     }
     window.addEventListener("pm-studio:generating", handler);
     return () => window.removeEventListener("pm-studio:generating", handler);
-  }, [playing, startPulse, stopPulse, chime]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
-  useEffect(() => () => { stopPad(); stopSeq(); stopAudioEl(); stopPulse(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { stopPad(); stopSeq(); stopAudioEl(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Derived ─────────────────────────────────────────────────────────────────
   const currentFile   = playlist[trackIdx];
@@ -487,7 +466,7 @@ export function MusicPlayer({ collapsed }: { collapsed: boolean }) {
 
           {/* ── SYNTH TAB ── */}
           {tab === "synth" && (
-            <div className="grid grid-cols-3 gap-1">
+            <div className="grid grid-cols-2 gap-1">
               {(Object.keys(PRESETS) as Preset[]).map(p => {
                 const active = preset === p && playing && tab === "synth";
                 return (
