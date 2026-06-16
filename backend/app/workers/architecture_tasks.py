@@ -10,15 +10,20 @@ from uuid import UUID
 from app.core.celery_app import celery_app
 from app.core.database import SyncSessionLocal
 from app.models.architecture import Architecture
+from app.models.prd import PRD
 from app.models.project import Project
+from app.models.requirement import Requirement
 from app.models.srs import SRS
 from app.services.ai.architecture_service import (
     ARCH_DOC_KEYS,
+    _requirements_brief,
     consolidate_architecture_suite,
+    edit_architecture_suite_ai,
     generate_full_architecture,
     run_single_architecture_doc,
 )
 from app.services.ai.model_override import clear_model_override, set_model_override
+from app.services.prd.source import resolve_prd_for_downstream
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +68,22 @@ def generate_architecture_task(
         arch.generation_task_id = self.request.id
         db.commit()
 
+        # Fetch PRD (finalized snapshot) and requirements for richer context
+        prd = db.query(PRD).filter(PRD.id == srs.prd_id).first() if srs.prd_id else None
+        prd_content = None
+        if prd and prd.content_json:
+            prd_content, _ = resolve_prd_for_downstream(prd)
+
+        reqs = (
+            db.query(Requirement)
+            .filter(
+                Requirement.project_id == arch.project_id,
+                Requirement.deleted_at.is_(None),
+            )
+            .all()
+        )
+        requirements_context = _requirements_brief(reqs)
+
         project_info = {
             "name": project.name if project else "Project",
             "type": "Web App",
@@ -75,6 +96,8 @@ def generate_architecture_task(
                 project_info,
                 db,
                 resume=resume,
+                prd_content=prd_content,
+                requirements_context=requirements_context,
             )
         )
     except Exception as exc:
@@ -139,6 +162,87 @@ def consolidate_architecture_task(
         return {"error": str(exc)[:500]}
     finally:
         db.close()
+
+
+@celery_app.task(bind=True, name="architecture.reassess")
+def reassess_architecture_task(
+    self,
+    architecture_id: str,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    """AI-reassess the whole suite: align to canon, AI-repair weak docs, re-score."""
+    set_model_override(model_provider, model_id)
+    db = SyncSessionLocal()
+    arch: Architecture | None = None
+    try:
+        arch = (
+            db.query(Architecture)
+            .filter(Architecture.id == UUID(architecture_id), Architecture.deleted_at.is_(None))
+            .first()
+        )
+        if not arch:
+            return {"error": "Architecture not found"}
+
+        result = _run_async(
+            consolidate_architecture_suite(UUID(architecture_id), db, ai_repair=True)
+        )
+        arch.generation_progress = {
+            "phase": "reassessed",
+            "message": "Suite reassessed with AI",
+        }
+        db.commit()
+        return result
+    except Exception as exc:
+        logger.exception("Architecture reassess failed")
+        if arch is not None:
+            arch.last_error = str(exc)[:500]
+            db.commit()
+        return {"error": str(exc)[:500]}
+    finally:
+        db.close()
+        clear_model_override()
+
+
+@celery_app.task(bind=True, name="architecture.edit_suite")
+def edit_architecture_suite_task(
+    self,
+    architecture_id: str,
+    instruction: str,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    """Apply one PM instruction across all 6 docs, then re-align and re-score."""
+    set_model_override(model_provider, model_id)
+    db = SyncSessionLocal()
+    arch: Architecture | None = None
+    try:
+        arch = (
+            db.query(Architecture)
+            .filter(Architecture.id == UUID(architecture_id), Architecture.deleted_at.is_(None))
+            .first()
+        )
+        if not arch:
+            return {"error": "Architecture not found"}
+
+        result = _run_async(
+            edit_architecture_suite_ai(UUID(architecture_id), instruction, db)
+        )
+        arch.generation_progress = {
+            "phase": "suite_edited",
+            "message": "Suite updated with AI edits",
+        }
+        db.commit()
+        return result
+    except Exception as exc:
+        logger.exception("Architecture suite edit failed")
+        if arch is not None:
+            arch.last_error = str(exc)[:500]
+            db.commit()
+        return {"error": str(exc)[:500]}
+    finally:
+        db.close()
+        clear_model_override()
 
 
 @celery_app.task(bind=True, name="architecture.regenerate_doc")

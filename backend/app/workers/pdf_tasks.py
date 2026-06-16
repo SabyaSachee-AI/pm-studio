@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.core.database import SyncSessionLocal
 from app.models.prd import PRD
 from app.models.project import Project
+from app.services.prd.source import get_prd_export_content
 from app.services.pdf.service import build_prd_html, render_html_to_pdf
 
 logger = logging.getLogger(__name__)
@@ -27,16 +28,22 @@ def export_prd_pdf_task(prd_id: str) -> dict[str, str]:
         project = db.query(Project).filter(Project.id == prd.project_id).first()
         project_name = project.name if project else "Unknown project"
 
-        html = build_prd_html(prd.content_json, project_name, prd.version)
+        export_content = get_prd_export_content(prd)
+        if not export_content:
+            return {"error": "PRD not found"}
+        meta = export_content.get("_meta") or {}
+        export_version = int(meta.get("finalized_version") or prd.version)
+
+        html = build_prd_html(export_content, project_name, export_version)
         pdf_bytes = render_html_to_pdf(html)
 
         export_dir = os.path.join(settings.upload_dir, "exports")
         os.makedirs(export_dir, exist_ok=True)
-        output_path = os.path.join(export_dir, f"prd-{prd_id}-v{prd.version}.pdf")
+        output_path = os.path.join(export_dir, f"prd-{prd_id}-v{export_version}.pdf")
         with open(output_path, "wb") as output_file:
             output_file.write(pdf_bytes)
 
-        return {"path": output_path, "prd_id": prd_id, "version": str(prd.version)}
+        return {"path": output_path, "prd_id": prd_id, "version": str(export_version)}
     except Exception as exc:
         logger.error("PRD PDF export failed: %s", exc)
         return {"error": str(exc)}

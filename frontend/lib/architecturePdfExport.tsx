@@ -2,6 +2,7 @@ import {
   DOC_TAB_META,
   type ArchDocKey,
 } from "@/components/features/architecture/ArchitecturePrintDocument";
+import { buildDiagramsForDoc } from "@/lib/architectureDiagrams";
 import { buildArchitecturePdf } from "@/lib/architecturePdfBuilder";
 import { initMermaidForPdf, renderMermaidPng } from "@/lib/renderMermaidSvg";
 import { rasterizeSvgForPdf, type SvgPngImage } from "@/lib/svgToPdfImage";
@@ -59,8 +60,10 @@ async function collectDiagramImages(
 
   for (const key of keys) {
     const doc = arch[key] as Record<string, unknown> | null | undefined;
-    const diagrams = doc?.diagrams as Record<string, string> | undefined;
-    if (!diagrams) continue;
+    if (!doc) continue;
+    // Use the SAME programmatic builders as the on-screen view (clean + reliable),
+    // merged with any AI-stored diagrams. Single source of truth.
+    const diagrams = buildDiagramsForDoc(key, doc);
     const prefix = DOC_KEY_PREFIX[key];
     for (const [name, chart] of Object.entries(diagrams)) {
       if (!chart?.trim()) continue;

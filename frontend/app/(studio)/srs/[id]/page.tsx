@@ -11,6 +11,7 @@ import {
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
+import { FinalizedBadge, finalizedBadgeClassName } from "@/components/ui/FinalizedBadge";
 import { Button } from "@/components/ui/button";
 import { GeneratedDocActions } from "@/components/ui/GeneratedDocActions";
 import { ModelSelect } from "@/components/ui/ModelSelect";
@@ -40,8 +41,6 @@ const STEPS = [
   { num: 3, label: "Review Draft" },
   { num: 4, label: "Confirm" },
   { num: 5, label: "Finalized" },
-  { num: 6, label: "Edit" },
-  { num: 7, label: "Save to KB" },
 ] as const;
 
 type EnrichedSRS = SRS & {
@@ -95,11 +94,13 @@ function StepProgressBar({
             <div key={step.num} className="flex items-center gap-1">
               <span
                 className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                  isActive
-                    ? "border-blue-500 bg-blue-900/50 text-blue-200"
-                    : isComplete
-                      ? "border-green-700 bg-green-900/30 text-green-300"
-                      : "border-gray-700 bg-gray-900 text-gray-500"
+                  step.label === "Finalized" && (isComplete || isActive)
+                    ? finalizedBadgeClassName
+                    : isActive
+                      ? "border-blue-500 bg-blue-900/50 text-blue-200"
+                      : isComplete
+                        ? "border-green-700 bg-green-900/30 text-green-300"
+                        : "border-gray-700 bg-gray-900 text-gray-500"
                 }`}
               >
                 {isComplete && !isActive ? "✓ " : ""}
@@ -459,14 +460,12 @@ export default function SrsDetailPage() {
     srs?.status === "approved";
 
   const derivedStep = useMemo(() => {
-    if (showKbDialog) return 7;
-    if (editMode) return 6;
     if (isFinalized) return 5;
     if (showConfirmModal) return 4;
     if (qualityResult) return 3;
     if (aiJob.isRunning || !content) return 1;
     return 2;
-  }, [aiJob.isRunning, content, editMode, isFinalized, qualityResult, showConfirmModal, showKbDialog]);
+  }, [aiJob.isRunning, content, isFinalized, qualityResult, showConfirmModal]);
 
   const currentStep = manualStep ?? derivedStep;
   const maxReached = isFinalized ? 5 : qualityResult ? 3 : content ? 2 : 1;
@@ -620,7 +619,14 @@ export default function SrsDetailPage() {
       const date = meta.client_approved_at
         ? new Date(String(meta.client_approved_at)).toLocaleDateString()
         : "";
-      return <p className="text-sm text-green-300">✅ Approved by client{date ? ` on ${date}` : ""}</p>;
+      return (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <FinalizedBadge label="Approved" className="text-xs" />
+          {date ? (
+            <span className="text-sm text-gray-400">by client on {date}</span>
+          ) : null}
+        </div>
+      );
     }
     if (status === "changes_requested") {
       return (
@@ -795,6 +801,7 @@ export default function SrsDetailPage() {
 
           <div className="flex flex-wrap items-center justify-between gap-3 no-print">
             <h1 className="text-2xl font-semibold">{project?.name ?? "Project"} SRS</h1>
+            {isFinalized ? <FinalizedBadge label="SRS finalized" /> : null}
             <div className="flex flex-wrap items-center gap-3">
               <ScreenModelSelector screen="srs" />
               <ModelSelect value={aiModel} onChange={setAiModel} />
@@ -954,6 +961,48 @@ export default function SrsDetailPage() {
                 </div>
               </div>
 
+              {/* Client review link — share before finalizing */}
+              <div className="rounded-xl border border-gray-700 bg-gray-900 p-4">
+                <p className="text-sm font-medium text-gray-300">🔗 Client review link</p>
+                <p className="mt-1 text-xs text-gray-500">Share with client to collect feedback before you finalize</p>
+                <div className="mt-2 flex items-center gap-2">
+                  <a
+                    href={portalUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 truncate rounded bg-gray-950 px-2 py-1 text-xs text-blue-300 underline hover:text-blue-200"
+                  >
+                    {portalUrl}
+                  </a>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(portalUrl);
+                      setPortalCopied(true);
+                      window.setTimeout(() => setPortalCopied(false), 2000);
+                    }}
+                  >
+                    {portalCopied ? "Copied!" : "Copy"}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Edit SRS — manual edit before finalizing */}
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setEditContent({ ...displayContent, _meta: content._meta });
+                    setEditMode(true);
+                    setManualStep(null);
+                  }}
+                >
+                  ✏️ Edit SRS
+                </Button>
+                <span className="text-xs text-gray-500">Make manual edits before finalizing</span>
+              </div>
+
               {versionHistory.length > 0 ? (
                 <div className="rounded-xl border border-gray-800 p-4">
                   <button type="button" className="text-sm text-gray-400" onClick={() => setChangeLogOpen((o) => !o)}>
@@ -973,8 +1022,10 @@ export default function SrsDetailPage() {
 
           {(currentStep === 5 || isFinalized) && content && displayContent && !editMode ? (
             <div className="no-print space-y-6">
-              <div className="rounded-xl border border-green-800 bg-green-900/20 p-6">
-                <h2 className="text-lg font-semibold text-green-200">✅ SRS FINALIZED</h2>
+              <div className="rounded-xl border border-green-800 bg-green-950/40 p-6">
+                <div className="flex flex-wrap items-center gap-3">
+                  <FinalizedBadge label="SRS finalized" className="text-sm" />
+                </div>
                 <p className="mt-1 text-sm text-gray-300">IEEE 830 Compliant</p>
                 <p className="text-sm text-gray-400">
                   Version: {srs.version} | Date: {confirmedDate} | Confirmed by: {confirmedBy}
@@ -1043,7 +1094,7 @@ export default function SrsDetailPage() {
                   onClick={() => {
                     setEditContent({ ...displayContent, _meta: content._meta });
                     setEditMode(true);
-                    setManualStep(6);
+                    setManualStep(null);
                   }}
                 >
                   ✏️ Edit SRS
@@ -1052,7 +1103,6 @@ export default function SrsDetailPage() {
                   variant="outline"
                   onClick={() => {
                     setShowKbDialog(true);
-                    setManualStep(7);
                     setKbTitle(`${project?.name ?? "Project"} SRS v${srs.version}`);
                   }}
                 >
@@ -1160,34 +1210,63 @@ export default function SrsDetailPage() {
         </div>
       </div>
 
+      {/* PRINT / PREVIEW DOCUMENT — formal A4 layout matching PRD style */}
       {displayContent ? (
-        <div className="print-only mt-8 font-serif text-black text-xs">
-          <div className="text-center">
-            <h1 className="text-lg font-bold">SOFTWARE REQUIREMENTS SPECIFICATION</h1>
-            <p className="text-sm">(IEEE 830 Compliant)</p>
+        <div className="print-only prd-print-sheet mt-8">
+          <div className="mx-auto max-w-3xl bg-white p-10 text-black font-serif text-sm">
+            <div className="mb-8 text-center">
+              <h1 className="text-2xl font-bold tracking-wide uppercase">
+                Software Requirements Specification
+              </h1>
+              <p className="mt-1 text-xs uppercase tracking-widest text-gray-500">
+                IEEE 830 Compliant
+              </p>
+            </div>
+
+            <table className="w-full mb-8 border-collapse text-sm">
+              <tbody>
+                {[
+                  ["Project", project?.name ?? "—"],
+                  ["Client", clientName],
+                  ["Version", `v${srs.version}`],
+                  ["Date", confirmedDate],
+                  ["Prepared by", confirmedBy],
+                  ["Source PRD", srs.source_prd_display_name ?? "—"],
+                  ["Status", isFinalized ? "FINALIZED" : "DRAFT"],
+                  ["Scope", `${String(stats.fr_count ?? 0)} FRs · ${String(stats.nfr_count ?? 0)} NFRs${qualityScore != null ? ` · Quality ${qualityScore}/100` : ""}`],
+                ].map(([label, value]) => (
+                  <tr key={label} className="border-b border-gray-200">
+                    <td className="py-2 pr-4 font-semibold w-36 text-gray-700">{label}</td>
+                    <td className="py-2">{value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <hr className="my-6 border-gray-300" />
+            <SrsContentView content={displayContent} />
+
+            {traceability ? (
+              <>
+                <hr className="my-6 border-gray-300" />
+                <h2 className="font-bold text-base mb-3">Traceability Matrix</h2>
+                <TraceabilityMatrix traceability={traceability} />
+              </>
+            ) : null}
+
+            <hr className="my-8 border-gray-300" />
+            <div className="grid grid-cols-2 gap-8 text-xs text-gray-600">
+              <div>
+                <p className="font-semibold">Confirmed by</p>
+                <p className="mt-1">{confirmedBy}</p>
+                <p className="mt-4 border-t border-gray-400 pt-1">Signature</p>
+              </div>
+              <div>
+                <p className="font-semibold">Date</p>
+                <p className="mt-1">{confirmedDate}</p>
+              </div>
+            </div>
           </div>
-          <table className="mt-4 w-full">
-            <tbody>
-              <tr><td className="font-semibold">Project</td><td>{project?.name}</td></tr>
-              <tr><td className="font-semibold">Client</td><td>{clientName}</td></tr>
-              <tr><td className="font-semibold">Version</td><td>v{srs.version}</td></tr>
-              <tr><td className="font-semibold">Date</td><td>{confirmedDate}</td></tr>
-              <tr><td className="font-semibold">Prepared</td><td>{confirmedBy}</td></tr>
-              <tr><td className="font-semibold">Status</td><td>FINALIZED</td></tr>
-            </tbody>
-          </table>
-          <hr className="my-4 border-black" />
-          <SrsContentView content={displayContent} />
-          {traceability ? (
-            <>
-              <hr className="my-4 border-black" />
-              <h2 className="font-bold">Traceability Matrix</h2>
-              <TraceabilityMatrix traceability={traceability} />
-            </>
-          ) : null}
-          <hr className="my-4 border-black" />
-          <p>Confirmed by: {confirmedBy} | Date: {confirmedDate}</p>
-          <p>Signature: ___________________</p>
         </div>
       ) : null}
     </>

@@ -24,6 +24,7 @@ import {
 import { saveAs } from "file-saver";
 import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
 import { Button } from "@/components/ui/button";
+import { FinalizedBadge, finalizedBadgeClassName } from "@/components/ui/FinalizedBadge";
 import { GeneratedDocActions } from "@/components/ui/GeneratedDocActions";
 import { ModelSelect } from "@/components/ui/ModelSelect";
 import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
@@ -41,9 +42,6 @@ import {
   aiButtonLabel,
   useAiJob,
 } from "@/lib/hooks/useAiJob";
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
 const STEPS = [
   { num: 1, label: "Analysis" },
@@ -365,11 +363,13 @@ function StepProgressBar({
             <div key={step.num} className="flex items-center gap-1">
               <span
                 className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                  isActive
-                    ? "border-blue-500 bg-blue-900/50 text-blue-200"
-                    : isComplete
-                      ? "border-green-700 bg-green-900/30 text-green-300"
-                      : "border-gray-700 bg-gray-900 text-gray-500"
+                  step.label === "Finalized" && (isComplete || isActive)
+                    ? finalizedBadgeClassName
+                    : isActive
+                      ? "border-blue-500 bg-blue-900/50 text-blue-200"
+                      : isComplete
+                        ? "border-green-700 bg-green-900/30 text-green-300"
+                        : "border-gray-700 bg-gray-900 text-gray-500"
                 }`}
               >
                 Step {step.num}: {step.label}
@@ -446,26 +446,12 @@ export default function RequirementDetailPage() {
 
   const runSynthesize = useCallback(
     async (requirementId: string) => {
-      aiJob.startManual("Synthesizing feedback");
+      const progressId = crypto.randomUUID();
+      aiJob.startManual("Synthesizing feedback", progressId);
       setManualStep(2);
 
       try {
-        const modelQS = aiModel
-          ? `?model_provider=${encodeURIComponent(aiModel.provider)}&model_id=${encodeURIComponent(aiModel.model)}`
-          : "";
-        const response = await fetch(
-          `${API_BASE}/requirements/${requirementId}/synthesize${modelQS}`,
-          {
-            method: "POST",
-            credentials: "include",
-          },
-        );
-        if (!response.ok) {
-          const body = (await response.json().catch(() => null)) as {
-            detail?: string;
-          } | null;
-          throw new Error(body?.detail ?? "Synthesis failed");
-        }
+        await api.synthesizeRequirement(requirementId, aiModel, progressId);
         await refreshRequirement(requirementId);
         setManualStep(3);
         setViewingVersion(null);
@@ -482,28 +468,17 @@ export default function RequirementDetailPage() {
 
   const runReanalyze = useCallback(
     async (requirementId: string, instructions: string) => {
-      aiJob.startManual("Rewriting requirement analysis");
+      const progressId = crypto.randomUUID();
+      aiJob.startManual("Rewriting requirement analysis", progressId);
       setManualStep(2);
 
       try {
-        const modelQS = aiModel
-          ? `?model_provider=${encodeURIComponent(aiModel.provider)}&model_id=${encodeURIComponent(aiModel.model)}`
-          : "";
-        const response = await fetch(
-          `${API_BASE}/requirements/${requirementId}/reanalyze${modelQS}`,
-          {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ instructions }),
-          },
+        await api.reanalyzeRequirement(
+          requirementId,
+          instructions,
+          aiModel,
+          progressId,
         );
-        if (!response.ok) {
-          const body = (await response.json().catch(() => null)) as {
-            detail?: string;
-          } | null;
-          throw new Error(body?.detail ?? "Reanalysis failed");
-        }
         await refreshRequirement(requirementId);
         setManualStep(3);
         setViewingVersion(null);
@@ -619,11 +594,17 @@ export default function RequirementDetailPage() {
         month: "long",
         day: "numeric",
       })
-    : new Date().toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      });
+    : req.updated_at
+      ? new Date(req.updated_at).toLocaleDateString(undefined, {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        })
+      : new Date().toLocaleDateString(undefined, {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        });
 
   const originalText = String(
     analysis?.original_text_snapshot ?? analysis?.extracted_text ?? "",
@@ -649,27 +630,69 @@ export default function RequirementDetailPage() {
     <>
       <style>{`
         @page {
-          size: A4 landscape;
-          margin: 1.5cm;
+          size: A4 portrait;
+          margin: 2cm 2cm 2.5cm 2cm;
         }
         @media print {
-          aside,
-          header,
-          nav,
-          .no-print {
-            display: none !important;
-          }
-          main {
-            padding: 0 !important;
-            overflow: visible !important;
-          }
+          html,
           body {
             background: #fff !important;
             color: #000 !important;
           }
+          aside,
+          header,
+          nav,
+          .no-print,
           .print-document {
-            color: #000 !important;
+            display: none !important;
+          }
+          main {
+            padding: 0 !important;
+            margin: 0 !important;
+            overflow: visible !important;
+          }
+          /* Print only the formal requirement sheet */
+          body * {
+            visibility: hidden;
+          }
+          .requirement-print-sheet,
+          .requirement-print-sheet * {
+            visibility: visible;
+          }
+          .requirement-print-sheet {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            margin: 0;
+            padding: 0;
             background: #fff !important;
+            color: #000 !important;
+            font-size: 11pt;
+            line-height: 1.5;
+          }
+          .requirement-print-sheet h1 {
+            font-size: 16pt;
+            line-height: 1.3;
+          }
+          .requirement-print-sheet h2 {
+            font-size: 11pt;
+            margin-top: 14pt;
+            margin-bottom: 6pt;
+            page-break-after: avoid;
+          }
+          .requirement-print-sheet .print-section {
+            page-break-inside: avoid;
+          }
+          .requirement-print-sheet pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 9pt;
+            line-height: 1.4;
+          }
+          .requirement-print-sheet table td {
+            padding: 2pt 0;
+            vertical-align: top;
           }
           .print-only {
             display: block !important;
@@ -713,21 +736,7 @@ export default function RequirementDetailPage() {
                 onClick={async () => {
                   setFinalizing(true);
                   try {
-                    const response = await fetch(
-                      `${API_BASE}/requirements/${req.id}`,
-                      {
-                        method: "PATCH",
-                        credentials: "include",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ status: "finalized" }),
-                      },
-                    );
-                    if (!response.ok) {
-                      const body = (await response.json().catch(() => null)) as {
-                        detail?: string;
-                      } | null;
-                      throw new Error(body?.detail ?? "Finalization failed");
-                    }
+                    await api.finalizeRequirement(req.id);
                     await refreshRequirement(req.id);
                     setShowConfirmModal(false);
                     setManualStep(5);
@@ -802,6 +811,7 @@ export default function RequirementDetailPage() {
 
           <div className="flex flex-wrap items-center justify-between gap-3 no-print">
             <h1 className="text-2xl font-semibold">Requirements Analysis</h1>
+            {isFinalized ? <FinalizedBadge /> : null}
             <div className="flex flex-wrap items-center gap-3">
               <ScreenModelSelector screen="requirements" />
               <ModelSelect value={aiModel} onChange={setAiModel} />
@@ -823,10 +833,8 @@ export default function RequirementDetailPage() {
           {/* ── STEP 5: FINALIZED ── */}
           {currentStep === 5 || isFinalized ? (
             <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="rounded-full border border-green-700 bg-green-900/40 px-3 py-1 text-sm font-medium uppercase text-green-300">
-                  Finalized
-                </span>
+              <div className="no-print flex flex-wrap items-center gap-3">
+                <FinalizedBadge />
                 <span className="text-sm text-gray-400">
                   {finalizedDate} · {finalizedBy}
                 </span>
@@ -1118,24 +1126,7 @@ export default function RequirementDetailPage() {
                             const file = e.target.files?.[0];
                             if (!file) return;
                             try {
-                              const formData = new FormData();
-                              formData.append("file", file);
-                              const uploadResponse = await fetch(
-                                `${API_BASE}/requirements/${id}/feedback-document`,
-                                {
-                                  method: "POST",
-                                  credentials: "include",
-                                  body: formData,
-                                },
-                              );
-                              if (!uploadResponse.ok) {
-                                const body = (await uploadResponse
-                                  .json()
-                                  .catch(() => null)) as { detail?: string } | null;
-                                throw new Error(
-                                  body?.detail ?? "Feedback upload failed",
-                                );
-                              }
+                              await api.uploadFeedback(id, file, aiModel);
                               await refreshRequirement(id);
                               await runSynthesize(id);
                             } catch (err) {
@@ -1169,13 +1160,13 @@ export default function RequirementDetailPage() {
       </div>
 
       {/* ── PRINT DOCUMENT (5 sections) ── */}
-      <div className="print-only mt-8 font-serif text-black">
-        <div className="text-center">
+      <div className="print-only requirement-print-sheet mt-8 font-serif text-black">
+        <div className="print-section text-center">
           <h1 className="text-xl font-bold tracking-wide">
             FINAL CLIENT REQUIREMENT
           </h1>
         </div>
-        <table className="mt-6 w-full text-sm">
+        <table className="print-section mt-6 w-full text-sm">
           <tbody>
             <tr>
               <td className="w-24 font-semibold">Project</td>
@@ -1201,14 +1192,17 @@ export default function RequirementDetailPage() {
         </table>
         <hr className="my-4 border-black" />
 
+        <div className="print-section">
         <h2 className="text-sm font-bold uppercase">
           Section 1 — Original Requirement
         </h2>
         <pre className="mt-2 whitespace-pre-wrap text-xs font-sans">
           {originalText || "Original document text not available."}
         </pre>
+        </div>
         <hr className="my-4 border-black" />
 
+        <div className="print-section">
         <h2 className="text-sm font-bold uppercase">
           Section 2 — Gap Analysis Summary
         </h2>
@@ -1225,8 +1219,10 @@ export default function RequirementDetailPage() {
             </li>
           ))}
         </ul>
+        </div>
         <hr className="my-4 border-black" />
 
+        <div className="print-section">
         <h2 className="text-sm font-bold uppercase">
           Section 3 — Client Feedback Summary
         </h2>
@@ -1245,8 +1241,10 @@ export default function RequirementDetailPage() {
             Client feedback captured in uploaded document.
           </p>
         )}
+        </div>
         <hr className="my-4 border-black" />
 
+        <div className="print-section">
         <h2 className="text-sm font-bold uppercase">
           Section 4 — Final Consolidated Requirement
         </h2>
@@ -1286,8 +1284,10 @@ export default function RequirementDetailPage() {
             </ul>
           </div>
         ) : null}
+        </div>
         <hr className="my-4 border-black" />
 
+        <div className="print-section">
         <h2 className="text-sm font-bold uppercase">Section 5 — Confirmation</h2>
         <table className="mt-2 text-xs">
           <tbody>
@@ -1305,6 +1305,7 @@ export default function RequirementDetailPage() {
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
     </>
   );

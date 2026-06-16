@@ -26,6 +26,7 @@ from app.services.ai.srs_service import (
     enrich_srs_content,
     rewrite_srs_ai,
 )
+from app.services.prd.source import get_finalized_prd_body, is_prd_finalized, prd_eligible_for_downstream, strip_prd_body
 from app.services.document.versioning import save_document_version
 from app.workers.srs_tasks import generate_srs_task
 
@@ -60,7 +61,13 @@ def _prd_workflow_status(prd: PRD) -> str:
 
 
 def _is_prd_eligible_for_srs(prd: PRD) -> bool:
-    return _prd_workflow_status(prd) in {"finalized", "confirmed", "approved"}
+    return prd_eligible_for_downstream(prd)
+
+
+def _prd_body_for_reference(prd: PRD | None) -> dict[str, Any] | None:
+    if not prd or not prd.content_json:
+        return None
+    return get_finalized_prd_body(prd.content_json) or strip_prd_body(prd.content_json)
 
 
 def _prd_display_name(prd: PRD, project_name: str) -> str:
@@ -102,7 +109,7 @@ def _to_srs_response(
     project: Project | None = None,
 ) -> SRSEnrichedResponse:
     content = _prepare_content(srs.content_json)
-    prd_content = _prepare_content(prd.content_json) if prd else None
+    prd_content = _prd_body_for_reference(prd)
     stats = compute_srs_stats(content, prd_content) if content else None
 
     if srs.status == SRSStatus.approved and stats is not None:
@@ -372,7 +379,7 @@ async def quality_check_srs(
     if not srs.content_json:
         raise HTTPException(status_code=400, detail="SRS has no content")
 
-    prd_content = srs.prd.content_json if srs.prd else None
+    prd_content = _prd_body_for_reference(srs.prd)
     result = check_srs_quality(srs.content_json, prd_content)
     content = enrich_srs_content(srs.content_json)
     meta = dict(content.get("_meta") or {})

@@ -15,6 +15,7 @@ from app.models.knowledge_base_item import (
     KnowledgeSourceType,
 )
 from app.models.prd import PRD
+from app.services.prd.source import get_prd_export_content
 from app.models.reusable_module import ReusableModule
 from app.models.srs import SRS
 from app.models.task_spec import TaskSpec
@@ -108,9 +109,13 @@ async def save_from_source(
         prd = result.scalar_one_or_none()
         if not prd or not prd.content_json:
             raise HTTPException(status_code=404, detail="PRD not found")
-        content_json = prd.content_json
+        content_json = get_prd_export_content(prd)
+        if not content_json:
+            raise HTTPException(status_code=404, detail="PRD not found")
         project_id = prd.project_id
-        title = title or f"PRD v{prd.version}"
+        meta = (content_json.get("_meta") or {})
+        version = int(meta.get("finalized_version") or prd.version)
+        title = title or f"PRD v{version}"
         item_type = KnowledgeItemType.document
     elif body.source_type == "srs":
         result = await db.execute(

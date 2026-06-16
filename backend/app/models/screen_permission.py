@@ -20,9 +20,11 @@ class ScreenKey(str, enum.Enum):
     srs = "srs"
     architecture = "architecture"
     tasks = "tasks"
+    traceability = "traceability"
     knowledge_base = "knowledge_base"
     decisions = "decisions"
     admin_users = "admin_users"
+    ai_config = "ai_config"
 
 
 class ScreenPermission(TimeStampedModel):

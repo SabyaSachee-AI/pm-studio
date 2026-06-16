@@ -9,6 +9,7 @@ from uuid import UUID
 from app.core.celery_app import celery_app
 from app.core.database import SyncSessionLocal
 from app.models.architecture import Architecture, ArchitectureStatus
+from app.services.prd.source import prd_eligible_for_downstream, resolve_prd_for_downstream
 from app.models.prd import PRD
 from app.models.project import Project
 from app.models.srs import SRS, SRSStatus
@@ -16,6 +17,7 @@ from app.models.task import Task, TaskPriority, TaskStatus, TaskType
 from app.models.task_spec import TaskSpec, TaskSpecStatus
 from app.services.ai.modules import generate_modules_ai
 from app.services.ai.job_progress import publish_job_progress
+from app.services.task.coverage import covered_fr_ids as _covered_frs, extract_fr_ids
 from app.services.task.system_prompts import (
     CODE_AUDIT_ORDER,
     DEPLOY_ORDER,
@@ -48,6 +50,10 @@ def _build_arch_content(arch: Architecture) -> dict[str, Any]:
     }
 
 
+def _prd_eligible(prd: PRD) -> bool:
+    return prd_eligible_for_downstream(prd)
+
+
 def _ensure_system_tasks(
     db: Any,
     project_id: UUID,
@@ -73,7 +79,7 @@ def _ensure_system_tasks(
     definitions: list[dict[str, Any]] = [
         {
             "order_index": PROJECT_BIBLE_ORDER,
-            "title": "Project bible — create .cursorrules file",
+            "title": "Project bible",
             "priority": TaskPriority.critical,
             "module_name": "⚙ SETUP — complete before all other tasks",
             "cursor_prompt": None,
@@ -134,17 +140,6 @@ def _ensure_system_tasks(
     return created_ids
 
 
-def _covered_frs(tasks: list[Task]) -> set[str]:
-    """Return the set of FR numbers that have at least one task."""
-    covered: set[str] = set()
-    for t in tasks:
-        if t.linked_fr:
-            covered.add(t.linked_fr)
-        for fr in (t.fr_references or []):
-            covered.add(fr)
-    return covered
-
-
 @celery_app.task(name="modules.extract")
 def extract_modules_task(
     project_id: str,
@@ -153,7 +148,7 @@ def extract_modules_task(
     replace_existing: bool = False,
     fill_gaps_only: bool = False,
 ) -> dict:
-    """Extract modules from SRS + Architecture and create Kanban tasks.
+    """Extract modules from PRD + SRS + Architecture and create Kanban tasks.
 
     replace_existing=True  → soft-delete all current tasks (+ their specs) then regenerate
     fill_gaps_only=True    → only generate tasks for FRs that have no coverage yet
@@ -162,7 +157,7 @@ def extract_modules_task(
     try:
         publish_job_progress(
             phase="starting",
-            message="Extracting modules from SRS + architecture…",
+            message="Extracting modules from PRD + SRS + architecture…",
             current_model="Auto model chain",
         )
         srs = db.query(SRS).filter(SRS.id == UUID(srs_id)).first()
@@ -179,14 +174,19 @@ def extract_modules_task(
         if not srs_eligible:
             return {"error": "SRS must be approved or finalized before task generation"}
 
-        all_frs: list[str] = [
-            fr.get("fr_number", "")
-            for fr in (srs.content_json or {}).get("functional_requirements", [])
-            if fr.get("fr_number")
-        ]
+        all_frs: list[str] = extract_fr_ids(srs.content_json)
 
-        prd = db.query(PRD).filter(PRD.id == srs.prd_id).first()
-        prd_content = prd.content_json if prd and prd.content_json else {}
+        prd = db.query(PRD).filter(PRD.id == srs.prd_id).first() if srs.prd_id else None
+        if not srs.prd_id or prd is None or not _prd_eligible(prd):
+            return {"error": "An approved or finalized PRD linked to the SRS is required"}
+        prd_content, prd_source = resolve_prd_for_downstream(prd)
+        if not prd_content:
+            return {"error": "An approved or finalized PRD linked to the SRS is required"}
+        logger.info(
+            "Module extract PRD source: %s v%s",
+            prd_source.get("type"),
+            prd_source.get("version"),
+        )
 
         project = db.query(Project).filter(Project.id == UUID(project_id)).first()
         project_name = project.name if project else "Unknown"

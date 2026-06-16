@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
 import { Button } from "@/components/ui/button";
+import { FinalizedBadge, WorkflowStatusBadge } from "@/components/ui/FinalizedBadge";
 import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
 import {
   aiButtonClassName,
@@ -12,12 +13,17 @@ import {
 } from "@/lib/hooks/useAiJob";
 import { api, type PRD, type Project, type SRS } from "@/lib/api";
 
+function isFinalized(srs: SRS): boolean {
+  return srs.status === "approved";
+}
+
 export default function SrsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState("");
   const [prds, setPrds] = useState<PRD[]>([]);
   const [srsList, setSrsList] = useState<SRS[]>([]);
   const [prdId, setPrdId] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const aiJob = useAiJob({
     onComplete: () => {
@@ -41,9 +47,12 @@ export default function SrsPage() {
   useEffect(() => {
     if (!projectId) return;
     api.listPrds(projectId).then((p) => {
-      const approved = p.filter((x) => x.status === "approved");
-      setPrds(approved);
-      if (approved[0]) setPrdId(approved[0].id);
+      // Show any PRD that is not a raw draft or rejected — backend maps status to workflow_status
+      const eligible = p.filter(
+        (x) => x.status !== "draft" && x.status !== "rejected",
+      );
+      setPrds(eligible);
+      if (eligible[0]) setPrdId(eligible[0].id);
     });
     api.listSrs(projectId).then(setSrsList);
   }, [projectId]);
@@ -54,6 +63,18 @@ export default function SrsPage() {
       task_id: string;
     };
     aiJob.startJob(task_id, "Generating SRS");
+  }
+
+  async function handleDelete(e: React.MouseEvent, id: string) {
+    e.preventDefault();
+    if (!confirm("Delete this SRS? This cannot be undone.")) return;
+    setDeletingId(id);
+    try {
+      await api.deleteSrs(id);
+      setSrsList((prev) => prev.filter((s) => s.id !== id));
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   return (
@@ -79,11 +100,23 @@ export default function SrsPage() {
           value={prdId}
           onChange={(e) => setPrdId(e.target.value)}
         >
-          {prds.map((p) => (
-            <option key={p.id} value={p.id}>
-              PRD v{p.version} ({p.status})
-            </option>
-          ))}
+          {prds.length === 0 && (
+            <option value="" disabled>No confirmed PRD — confirm a PRD first</option>
+          )}
+          {prds.map((p) => {
+            const projectName = projects.find((pr) => pr.id === p.project_id)?.name ?? "";
+            const statusLabel =
+              p.status === "approved" || p.status === "finalized"
+                ? "Finalized"
+                : p.status === "confirmed"
+                  ? "Confirmed"
+                  : "Ready";
+            return (
+              <option key={p.id} value={p.id}>
+                {projectName ? `${projectName} — PRD v${p.version}` : `PRD v${p.version}`} ({statusLabel})
+              </option>
+            );
+          })}
         </select>
         <Button
           onClick={() => void handleGenerate()}
@@ -101,17 +134,39 @@ export default function SrsPage() {
         />
       ) : null}
       <div className="rounded-xl border border-gray-800">
-        {srsList.map((s) => (
-          <Link
-            key={s.id}
-            href={`/srs/${s.id}`}
-            className="block border-b border-gray-800 px-4 py-3 last:border-0 hover:bg-gray-900"
-          >
-            <p className="font-medium">
-              SRS v{s.version} · {s.status}
-            </p>
-          </Link>
-        ))}
+        {srsList.map((s) => {
+          const finalized = isFinalized(s);
+          return (
+            <div
+              key={s.id}
+              className="flex items-center border-b border-gray-800 last:border-0 hover:bg-gray-900/50"
+            >
+              <Link href={`/srs/${s.id}`} className="flex flex-1 items-center gap-3 px-4 py-3">
+                <span className="font-medium">
+                  {projects.find((p) => p.id === s.project_id)?.name
+                    ? `${projects.find((p) => p.id === s.project_id)!.name} — SRS v${s.version}`
+                    : `SRS v${s.version}`}
+                </span>
+                <WorkflowStatusBadge status={s.status} />
+                {finalized && (
+                  <span title="Approved — cannot delete">
+                    <i className="ti ti-lock text-xs text-emerald-600" aria-hidden />
+                  </span>
+                )}
+              </Link>
+              <button
+                onClick={(e) => void handleDelete(e, s.id)}
+                disabled={finalized || deletingId === s.id}
+                title={finalized ? "Approved SRS documents cannot be deleted" : "Delete SRS"}
+                className="mr-3 flex h-7 w-7 shrink-0 items-center justify-center rounded border border-red-900/40 bg-red-950/20 text-red-500 hover:border-red-700/60 hover:bg-red-950/40 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30 transition-colors"
+              >
+                {deletingId === s.id
+                  ? <i className="ti ti-loader-2 animate-spin text-sm" aria-hidden />
+                  : <i className="ti ti-trash text-sm" aria-hidden />}
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

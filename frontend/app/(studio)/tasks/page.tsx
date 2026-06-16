@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
 import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
@@ -9,6 +10,15 @@ import {
   aiButtonLabel,
   useAiJob,
 } from "@/lib/hooks/useAiJob";
+import { buildSpecPdf } from "@/lib/specPdfBuilder";
+import {
+  buildAllSpecsMarkdown,
+  buildSpecMarkdown,
+  downloadTextFile,
+  slugFilename,
+  type AllSpecsItem,
+  type SpecMdTask,
+} from "@/lib/specMarkdown";
 import {
   api,
   type AiModelOption,
@@ -109,23 +119,42 @@ function specEndpoints(c: Record<string, unknown>): SpecEndpoint[] {
 
 // ── Smart coverage analysis ───────────────────────────────────────────────────
 
-function analyzeHealth(allRegular: KanbanTask[], totalTasks: number, specReady: number, specGenerating: number): HealthIssue[] {
+function analyzeHealth(
+  allRegular: KanbanTask[],
+  totalTasks: number,
+  specReady: number,
+  specGenerating: number,
+  missingFrs?: string[] | null,
+): HealthIssue[] {
   if (totalTasks === 0) return [];
   const issues: HealthIssue[] = [];
 
-  // 1. FR gap detection — find numeric gaps in FR sequence
+  // FR numbers referenced by existing tasks (used by the heuristic fallback
+  // and the truncated-generation check below).
   const allFrRefs = allRegular.flatMap((t) => {
     const refs = [...(t.fr_references ?? [])];
     if (t.linked_fr) refs.unshift(t.linked_fr);
     return refs;
   }).filter(Boolean);
-
   const frNums = [...new Set(allFrRefs)]
     .map((fr) => parseInt(fr.replace(/\D/g, ""), 10))
     .filter((n) => n > 0)
     .sort((a, b) => a - b);
 
-  if (frNums.length > 0) {
+  // 1. FR gap detection — prefer the authoritative coverage (real SRS FR list,
+  // normalized server-side). Fall back to the numeric-sequence heuristic only
+  // when coverage data hasn't loaded yet.
+  if (missingFrs != null) {
+    if (missingFrs.length > 0) {
+      const preview = missingFrs.slice(0, 5).join(", ");
+      issues.push({
+        level: "critical",
+        icon: "ti-alert-circle",
+        message: `${missingFrs.length} FR${missingFrs.length > 1 ? "s" : ""} have no task: ${preview}${missingFrs.length > 5 ? ` +${missingFrs.length - 5} more` : ""}.`,
+        action: "regenerate",
+      });
+    }
+  } else if (frNums.length > 0) {
     const maxFr  = frNums[frNums.length - 1];
     const frSet  = new Set(frNums);
     const gaps   = Array.from({ length: maxFr }, (_, i) => i + 1).filter((n) => !frSet.has(n));
@@ -194,17 +223,21 @@ function analyzeHealth(allRegular: KanbanTask[], totalTasks: number, specReady: 
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
+type GenerateMode = "generate" | "regenerate" | "fill-gaps";
+
 interface DashboardProps {
+  projectId:       string;
   board:           KanbanBoard | null;
   totalTasks:      number;
+  missingFrs:      string[] | null;
   extractJob:      ReturnType<typeof useAiJob>;
   extractBtnLabel: ReturnType<typeof aiButtonLabel>;
   clearLoading:    boolean;
-  onGenerate:      () => void;
+  onGenerate:      (mode: GenerateMode) => void;
   onClear:         () => void;
 }
 
-function Dashboard({ board, totalTasks, extractJob, extractBtnLabel, clearLoading, onGenerate, onClear }: DashboardProps) {
+function Dashboard({ projectId, board, totalTasks, missingFrs, extractJob, extractBtnLabel, clearLoading, onGenerate, onClear }: DashboardProps) {
   const allRegular = useMemo(
     () => COLUMNS.flatMap(({ key }) => (board?.[key] ?? []).filter((t) => !isSystem(t))),
     [board],
@@ -222,8 +255,8 @@ function Dashboard({ board, totalTasks, extractJob, extractBtnLabel, clearLoadin
   const isGenerated    = totalTasks > 0;
 
   const healthIssues = useMemo(
-    () => analyzeHealth(allRegular, totalTasks, specReady, specGenerating),
-    [allRegular, totalTasks, specReady, specGenerating],
+    () => analyzeHealth(allRegular, totalTasks, specReady, specGenerating, missingFrs),
+    [allRegular, totalTasks, specReady, specGenerating, missingFrs],
   );
 
   const ISSUE_STYLE = {
@@ -272,7 +305,7 @@ function Dashboard({ board, totalTasks, extractJob, extractBtnLabel, clearLoadin
           <Button
             variant="outline"
             size="sm"
-            onClick={onGenerate}
+            onClick={() => onGenerate(isGenerated ? "regenerate" : "generate")}
             disabled={extractBtnLabel.disabled || extractJob.isRunning}
             className={`h-8 text-xs ${aiButtonClassName(extractBtnLabel.variant)}`}
           >
@@ -294,6 +327,15 @@ function Dashboard({ board, totalTasks, extractJob, extractBtnLabel, clearLoadin
               Reset board
             </Button>
           )}
+          {isGenerated && (
+            <Link
+              href={`/traceability?project=${projectId}`}
+              className="inline-flex items-center justify-center rounded-md border border-indigo-800/40 bg-transparent px-3 py-1 text-xs font-semibold text-indigo-400 hover:bg-indigo-950/30 hover:text-indigo-300 transition-colors h-8"
+            >
+              <i className="ti ti-git-commit mr-1.5 text-sm" aria-hidden />
+              Traceability matrix
+            </Link>
+          )}
         </div>
       </div>
 
@@ -301,7 +343,7 @@ function Dashboard({ board, totalTasks, extractJob, extractBtnLabel, clearLoadin
       {totalTasks === 0 ? (
         <div className="flex items-center gap-3 rounded-lg border border-dashed border-gray-700/60 bg-gray-800/30 px-4 py-5 text-sm text-gray-500">
           <i className="ti ti-info-circle text-lg text-gray-600" aria-hidden />
-          Generate tasks from your approved SRS to start tracking development progress.
+          Generate tasks from your approved PRD, finalized SRS, and architecture suite to start tracking development progress.
         </div>
       ) : (
         <>
@@ -386,12 +428,20 @@ function Dashboard({ board, totalTasks, extractJob, extractBtnLabel, clearLoadin
                         <span className="text-xs leading-relaxed">{issue.message}</span>
                       </div>
                       {issue.action === "regenerate" && (
-                        <button
-                          onClick={onGenerate}
-                          className="shrink-0 rounded px-2.5 py-1 text-[11px] font-medium bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700/60"
-                        >
-                          Regenerate
-                        </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => onGenerate("fill-gaps")}
+                            className="flex items-center gap-1 rounded px-2.5 py-1 text-[11px] font-medium bg-indigo-650 hover:bg-indigo-600 text-white border border-indigo-700/40 cursor-pointer transition-all"
+                          >
+                            <i className="ti ti-wand" aria-hidden /> Solve gaps with AI
+                          </button>
+                          <Link
+                            href={`/traceability?project=${projectId}`}
+                            className="rounded px-2.5 py-1 text-[11px] font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700/60"
+                          >
+                            Analyze Gaps
+                          </Link>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -434,11 +484,15 @@ function SpecDetailPanel({
   summaryText,
   copiedKey,
   onCopySummary,
+  onPrintPdf,
+  onDownloadMd,
 }: {
   content:       Record<string, unknown>;
   summaryText:   string;
   copiedKey:     string | null;
   onCopySummary: () => void;
+  onPrintPdf:    () => void;
+  onDownloadMd:  () => void;
 }) {
   const tables      = specTables(content);
   const endpoints   = specEndpoints(content);
@@ -448,6 +502,30 @@ function SpecDetailPanel({
 
   return (
     <div className="space-y-6">
+      {/* Print / download spec */}
+      <div className="flex justify-end gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 px-3 text-xs"
+          onClick={onDownloadMd}
+          title="Download this spec as a Markdown file"
+        >
+          <i className="ti ti-markdown mr-1.5 text-sm" aria-hidden />
+          Download MD
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 px-3 text-xs"
+          onClick={onPrintPdf}
+          title="Download this spec as an A4 PDF"
+        >
+          <i className="ti ti-file-type-pdf mr-1.5 text-sm" aria-hidden />
+          Print PDF
+        </Button>
+      </div>
+
       {/* Scope */}
       <div>
         <SecHeader icon="ti-target" label="What to build" color="border-purple-800/40 text-purple-400" />
@@ -590,6 +668,8 @@ export default function TasksPage() {
   const [projects,          setProjects]          = useState<Project[]>([]);
   const [projectId,         setProjectId]         = useState("");
   const [board,             setBoard]             = useState<KanbanBoard | null>(null);
+  const [missingFrs,        setMissingFrs]        = useState<string[] | null>(null);
+  const [allSpecsLoading,   setAllSpecsLoading]   = useState(false);
   const [srsList,           setSrsList]           = useState<SRS[]>([]);
   const [users,             setUsers]             = useState<UserResponse[]>([]);
   const [selectedTask,      setSelectedTask]      = useState<KanbanTask | null>(null);
@@ -630,6 +710,13 @@ export default function TasksPage() {
   const loadBoard = useCallback(async (pid: string) => {
     if (!pid) return;
     setBoard(await api.getKanban(pid));
+    // Authoritative FR coverage (real SRS FR list, normalized server-side)
+    try {
+      const cov = await api.getTaskCoverage(pid);
+      setMissingFrs(cov.missing_frs ?? []);
+    } catch {
+      setMissingFrs(null);
+    }
   }, []);
 
   useEffect(() => {
@@ -693,6 +780,68 @@ export default function TasksPage() {
     catch { alert("Could not copy to clipboard.") }
   }
 
+  const projectName = projects.find((p) => p.id === projectId)?.name ?? "Project";
+
+  function specMdTaskFor(task: KanbanTask): SpecMdTask {
+    return {
+      title:        task.title,
+      seq:          seqMap.get(task.id) ?? null,
+      priority:     task.priority,
+      module_name:  task.module_name ?? null,
+      linked_fr:    task.linked_fr ?? task.fr_references?.[0] ?? null,
+      effort_hours: task.effort_hours ?? null,
+    };
+  }
+
+  function handlePrintSpec() {
+    if (!selectedTask || !hasReadySpec) return;
+    try {
+      buildSpecPdf({ task: specMdTaskFor(selectedTask), content: specContent, projectName });
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Could not generate the spec PDF.");
+    }
+  }
+
+  function handleDownloadSpecMd() {
+    if (!selectedTask || !hasReadySpec) return;
+    const md = buildSpecMarkdown(specMdTaskFor(selectedTask), specContent, 1);
+    downloadTextFile(`${slugFilename(projectName)}-spec-${slugFilename(selectedTask.title)}.md`, md);
+  }
+
+  async function handleDownloadAllSpecsMd() {
+    if (!board) return;
+    setAllSpecsLoading(true);
+    try {
+      // All non-system tasks, ordered by serial
+      const tasks = COLUMNS
+        .flatMap(({ key }) => board[key] ?? [])
+        .filter((t) => !isSystem(t))
+        .sort((a, b) => (seqMap.get(a.id) ?? 9e9) - (seqMap.get(b.id) ?? 9e9));
+
+      const items: AllSpecsItem[] = [];
+      for (const t of tasks) {
+        if (t.spec_status !== "ready") continue;
+        try {
+          const ts = await api.getSpecByTask(t.id);
+          if (ts.content_json) {
+            items.push({ task: specMdTaskFor(t), content: ts.content_json as Record<string, unknown> });
+          }
+        } catch { /* skip tasks whose spec can't be fetched */ }
+      }
+
+      if (items.length === 0) {
+        alert("No generated specs to export yet. Generate task specs first.");
+        return;
+      }
+      const md = buildAllSpecsMarkdown(projectName, items);
+      downloadTextFile(`${slugFilename(projectName)}-all-specs.md`, md);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Could not export all specs.");
+    } finally {
+      setAllSpecsLoading(false);
+    }
+  }
+
   async function fetchBible(force = false): Promise<string | null> {
     if (bible && !force) return bible.content;
     try { const d = await api.getProjectBible(projectId); setBible(d); return d.content }
@@ -722,16 +871,31 @@ export default function TasksPage() {
     URL.revokeObjectURL(u);
   }
 
-  async function handleGenerateTasks() {
+  async function handleGenerateTasks(mode: "generate" | "regenerate" | "fill-gaps" = "generate") {
     const ELIGIBLE = ["approved", "finalized", "confirmed"];
     const approved = srsList.find((s) =>
       ELIGIBLE.includes(s.status) ||
       ELIGIBLE.includes((s as SRS & { workflow_status?: string }).workflow_status ?? ""),
     );
-    if (!approved) { alert("No eligible SRS found. Approve the SRS before generating tasks."); return }
+    if (!approved) {
+      alert(
+        "No eligible SRS found. Finalize your PRD and SRS, and confirm a finalized architecture suite before generating tasks.",
+      );
+      return;
+    }
+
+    // regenerate → replace_existing=true  (wipes old tasks + specs, creates fresh set)
+    // fill-gaps  → fill_gaps_only=true    (only adds tasks for FRs with no coverage)
+    // generate   → both false             (first run)
+    const opts = mode === "regenerate"
+      ? { replaceExisting: true }
+      : mode === "fill-gaps"
+        ? { fillGapsOnly: true }
+        : {};
+
     extractJob.startManual("Extracting modules");
     try {
-      const { task_id } = await api.extractModules(projectId, approved.id);
+      const { task_id } = await api.extractModules(projectId, approved.id, opts);
       extractJob.startJob(task_id, "Extracting modules");
     } catch (err) {
       extractJob.failManual(err instanceof Error ? err.message : "Failed to start task generation");
@@ -832,7 +996,7 @@ export default function TasksPage() {
         draggable
         onDragStart={() => setDragTaskId(task.id)}
         onClick={() => void openTask(task)}
-        className={`cursor-pointer rounded-md border border-l-2 px-2.5 py-2 transition-all select-none ${left} ${
+        className={`cursor-pointer rounded-md border border-l-2 px-3 py-3 transition-all select-none ${left} ${
           isSelected
             ? "border-blue-500/60 bg-gray-800/90 ring-1 ring-blue-500/30"
             : "border-gray-700/60 bg-gray-900/80 hover:border-gray-600/70 hover:bg-gray-900"
@@ -846,7 +1010,7 @@ export default function TasksPage() {
           )}
           <p className="min-w-0 flex-1 text-[13px] font-medium leading-snug text-gray-100">{task.title}</p>
         </div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {task.module_name && (
             <span className="rounded border border-indigo-800/30 bg-indigo-950/60 px-1.5 py-0.5 text-[10px] text-indigo-400">
               {task.module_name.split("—").pop()?.trim() ?? task.module_name}
@@ -879,7 +1043,7 @@ export default function TasksPage() {
     return (
       <div key={task.id} className={`rounded-md border p-2.5 ${st.card}`}>
         <div className="flex items-start justify-between gap-2">
-          <p className="text-[13px] font-medium text-gray-100">{task.title}</p>
+          <p className="text-[13px] font-medium text-gray-100">{isBible ? "Project bible" : task.title}</p>
           <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold tracking-widest ${st.bCls}`}>{st.badge}</span>
         </div>
         {task.module_name && <p className="mt-1 text-[10px] text-gray-500">{task.module_name}</p>}
@@ -921,12 +1085,14 @@ export default function TasksPage() {
 
       {/* Dashboard */}
       <Dashboard
+        projectId={projectId}
         board={board}
         totalTasks={totalTasks}
+        missingFrs={missingFrs}
         extractJob={extractJob}
         extractBtnLabel={extractBtn}
         clearLoading={clearLoading}
-        onGenerate={() => void handleGenerateTasks()}
+        onGenerate={(mode) => void handleGenerateTasks(mode)}
         onClear={() => void handleClearAllTasks()}
       />
 
@@ -942,7 +1108,7 @@ export default function TasksPage() {
       <div className="flex gap-2 items-start">
 
         {/* Kanban — takes left half (or full width when panel closed) */}
-        <div className={`min-w-0 overflow-x-auto pb-2 transition-all ${panelOpen ? "basis-1/2" : "w-full"}`}>
+        <div className="flex-1 min-w-0 overflow-x-auto pb-2">
           <div className="flex gap-2.5" style={{ minWidth: "max-content" }}>
             {COLUMNS.map(({ key, label }) => {
               const cs       = COL_STYLE[key] ?? COL_STYLE.backlog;
@@ -979,13 +1145,33 @@ export default function TasksPage() {
               );
             })}
           </div>
+
+          {/* Export all generated specs as one Markdown file (ordered by serial) */}
+          {totalTasks > 0 && (
+            <div className="mt-4 flex items-center gap-3 border-t border-gray-800 pt-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-3 text-xs"
+                disabled={allSpecsLoading}
+                onClick={() => void handleDownloadAllSpecsMd()}
+                title="Download a single Markdown file with every generated spec, ordered by task serial"
+              >
+                <i className="ti ti-markdown mr-1.5 text-sm" aria-hidden />
+                {allSpecsLoading ? "Collecting specs…" : "Print all specs (MD)"}
+              </Button>
+              <span className="text-[11px] text-gray-600">
+                One Markdown summary of every generated spec, in task order.
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Developer panel — right half (50%) of the screen, sticky */}
         {panelOpen && selectedTask && (
           <div
-            className="basis-1/2 shrink-0 sticky top-4 flex flex-col rounded-xl border border-gray-700/60 bg-gray-900 overflow-hidden"
-            style={{ maxHeight: "calc(100vh - 110px)" }}
+            className="w-[560px] shrink-0 sticky top-2 z-10 flex flex-col rounded-xl border border-gray-700/60 bg-gray-950 shadow-2xl overflow-hidden"
+            style={{ maxHeight: "calc(100vh - 24px)" }}
           >
             {/* Panel header */}
             <div className="border-b border-gray-800 bg-gray-900 px-5 pt-3 pb-3 flex-shrink-0">
@@ -1163,7 +1349,7 @@ export default function TasksPage() {
                     </Button>
                   ) : (
                     <Button
-                      className={`w-full h-9 text-sm ${aiButtonClassName("ai")}`}
+                      className={`w-full h-9 text-sm ${aiButtonClassName("normal")}`}
                       onClick={() => void handleGenerateSpec(selectedTask)}
                       disabled={isGenerating}
                     >
@@ -1190,6 +1376,8 @@ export default function TasksPage() {
                     summaryText={summaryText}
                     copiedKey={copiedKey}
                     onCopySummary={() => void copyText("summary", summaryText)}
+                    onPrintPdf={handlePrintSpec}
+                    onDownloadMd={handleDownloadSpecMd}
                   />
                 </>
               )}

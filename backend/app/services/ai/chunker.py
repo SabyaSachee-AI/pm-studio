@@ -357,6 +357,15 @@ async def chunked_prd(
         "Be specific, actionable, and comprehensive. "
         "Return strictly structured JSON matching the schema exactly."
     )
+    source = analysis_result.get("_generation_source") or {}
+    if source.get("type") == "final_draft_json":
+        version = source.get("version", "?")
+        system += (
+            f" The input is FINALIZED requirement draft version {version} — treat it as the sole "
+            "source of truth. Every confirmed feature, technical decision, and out-of-scope item "
+            "must be reflected in the PRD. Never revert to generic placeholders or the original "
+            "uploaded PDF. Preserve exact terminology, thresholds, and architecture from the draft."
+        )
 
     # Build fixed context block (analysis result) — compact
     analysis_json = _compact_json(analysis_result, max_chars=2_000)
@@ -367,9 +376,23 @@ async def chunked_prd(
     risks_text = "\n".join(
         f"- {r}" for r in analysis_result.get("business_risks", [])
     )
+    source_block = ""
+    mandatory_block = ""
+    if source.get("type") == "final_draft_json":
+        from app.services.requirement.source import mandatory_constraints_for_prd
+
+        mandatory_block = mandatory_constraints_for_prd(analysis_result)
+        source_block = (
+            f"\nAUTHORITATIVE SOURCE: Final Requirement Draft version "
+            f"{source.get('version', '?')} (finalized).\n"
+            f"{source.get('instruction', '')}\n"
+        )
+    mandatory_section = f"{mandatory_block}\n\n" if mandatory_block else ""
     fixed_header = (
         f"Project: {project_name}\n"
-        f"Project Type: {analysis_result.get('project_type', 'Software')}\n\n"
+        f"Project Type: {analysis_result.get('project_type', 'Software')}\n"
+        f"{source_block}\n"
+        f"{mandatory_section}"
         f"Known Gaps:\n{gaps_summary}\n\n"
         f"Business Risks:\n{risks_text}\n\n"
         f"Analysis Summary: {analysis_result.get('summary', '')}\n\n"
@@ -564,7 +587,7 @@ async def chunked_modules(
     org_id: UUID | None = None,
     db: AsyncSession | None = None,
 ) -> ModuleListSchema:
-    """Extract modules and tasks from SRS + Architecture.
+    """Extract modules and tasks from PRD + SRS + architecture.
 
     Splits the FR list into batches; each batch is processed independently.
     Arch context is compacted and included in every chunk.
@@ -587,7 +610,15 @@ async def chunked_modules(
 
     all_frs = srs_content.get("functional_requirements", [])
     if target_frs:
-        all_frs = [fr for fr in all_frs if fr.get("fr_number") in target_frs]
+        # Match on normalized FR ids so format drift (FR-3 vs FR-003) never
+        # silently filters everything out — that would generate zero tasks.
+        from app.services.task.coverage import normalize_fr_id  # noqa: PLC0415
+
+        target_set = {normalize_fr_id(t) for t in target_frs}
+        all_frs = [
+            fr for fr in all_frs
+            if normalize_fr_id(fr.get("fr_number") or fr.get("id")) in target_set
+        ]
 
     # Build compact arch context once
     arch_section = _build_compact_arch_context(arch_content)

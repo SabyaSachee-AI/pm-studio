@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { Layers } from "lucide-react";
 import { ArchModelSelector } from "@/components/ui/ArchModelSelector";
 import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
+import { WorkflowStatusBadge, finalizedBadgeClassName } from "@/components/ui/FinalizedBadge";
+import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
 import { Button } from "@/components/ui/button";
 import { Toast } from "@/components/ui/Toast";
 import {
@@ -32,6 +34,39 @@ const DOC_STATUS_KEYS = [
 ] as const;
 
 const DOCS_TOTAL = DOC_STATUS_KEYS.length;
+
+const STEPS = [
+  { num: 1, label: "Generate" },
+  { num: 2, label: "Review" },
+  { num: 3, label: "Align" },
+  { num: 4, label: "Confirm" },
+  { num: 5, label: "Finalized" },
+] as const;
+
+function ListStepBar() {
+  return (
+    <div className="mb-6 flex flex-wrap items-center gap-1 text-sm">
+      {STEPS.map((step, index) => (
+        <div key={step.num} className="flex items-center gap-1">
+          <span
+            className={`rounded-full border px-3 py-1 text-xs font-medium ${
+              step.num === 1
+                ? "border-blue-500 bg-blue-900/50 text-blue-200"
+                : step.label === "Finalized"
+                  ? finalizedBadgeClassName
+                  : "border-gray-700 bg-gray-900 text-gray-500"
+            }`}
+          >
+            Step {step.num}: {step.label}
+          </span>
+          {index < STEPS.length - 1 ? (
+            <span className="text-gray-600">→</span>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function countCompletedDocs(item: ArchitectureListItem): number {
   return item.docs_generated ?? DOC_STATUS_KEYS.filter(
@@ -77,13 +112,6 @@ function prdDisplayLabel(
   return `${projectName} PRD — v${prd.version} — ${timestamp}`;
 }
 
-function statusBadgeClass(status: string): string {
-  const s = status.toLowerCase();
-  if (s === "finalized") return "border-green-700 bg-green-900/40 text-green-300";
-  if (s === "confirmed") return "border-blue-700 bg-blue-900/40 text-blue-300";
-  return "border-gray-600 bg-gray-800 text-gray-300";
-}
-
 export default function ArchitectureListPage() {
   const router = useRouter();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -93,6 +121,7 @@ export default function ArchitectureListPage() {
   const [architectures, setArchitectures] = useState<ArchitectureListItem[]>([]);
   const [selectedSrsId, setSelectedSrsId] = useState("");
   const [generateModel, setGenerateModel] = useState<ModelChoice | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [toast, setToast] = useState<{
     message: string;
     type: "success" | "error";
@@ -182,6 +211,19 @@ export default function ArchitectureListPage() {
     return "";
   }, [selectedSrsId, selectedSrs, prdList]);
 
+  async function handleDelete(id: string) {
+    if (!confirm("Delete this architecture suite? This cannot be undone.")) return;
+    setDeletingId(id);
+    try {
+      await api.deleteArchitecture(id);
+      setArchitectures((prev) => prev.filter((a) => a.id !== id));
+    } catch {
+      showToast("Failed to delete architecture.", "error");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   async function handleGenerate() {
     if (!projectId || !selectedSrsId || !canGenerate) {
       showToast(generateDisabledReason || "Select an eligible SRS first.", "error");
@@ -215,10 +257,11 @@ export default function ArchitectureListPage() {
         onDismiss={() => setToast((t) => ({ ...t, visible: false }))}
       />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Layers className="h-7 w-7 text-blue-400" />
           <h1 className="text-2xl font-semibold text-white">Architecture suite</h1>
+          <ScreenModelSelector screen="architecture" />
         </div>
         <select
           className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
@@ -233,8 +276,10 @@ export default function ArchitectureListPage() {
         </select>
       </div>
 
+      <ListStepBar />
+
       <div className="rounded-xl border border-gray-800 bg-gray-900 p-6">
-        <h2 className="font-medium text-white">Generate from SRS</h2>
+        <h2 className="font-medium text-white">Step 1 — Generate from SRS</h2>
         <p className="mt-1 text-sm text-gray-400">
           Creates 6 technical documents: system, database, API, frontend, security, UI/UX
         </p>
@@ -247,11 +292,14 @@ export default function ArchitectureListPage() {
               onChange={(e) => setSelectedSrsId(e.target.value)}
             >
               <option value="">Select SRS...</option>
-              {eligibleSrs.map((s) => (
-                <option key={s.id} value={s.id}>
-                  SRS v{s.version} — {s.status}
-                </option>
-              ))}
+              {eligibleSrs.map((s) => {
+                const projName = selectedProject?.name ?? projects.find((p) => p.id === s.project_id)?.name ?? "";
+                return (
+                  <option key={s.id} value={s.id}>
+                    {projName ? `${projName} — SRS v${s.version}` : `SRS v${s.version}`} ({s.status})
+                  </option>
+                );
+              })}
             </select>
           </label>
           {selectedSrs ? (
@@ -263,11 +311,7 @@ export default function ArchitectureListPage() {
                 </span>
                 {linkedPrd ? (
                   <>
-                    <span
-                      className={`shrink-0 rounded-full border px-2 py-0.5 text-xs ${statusBadgeClass(linkedPrd.status)}`}
-                    >
-                      {linkedPrd.status}
-                    </span>
+                    <WorkflowStatusBadge status={linkedPrd.status} />
                     <Link
                       href={`/prds/${linkedPrd.id}`}
                       className="shrink-0 text-xs text-blue-400 hover:underline"
@@ -307,12 +351,12 @@ export default function ArchitectureListPage() {
         </div>
         {eligibleSrs.length === 0 ? (
           <p className="mt-3 text-sm text-amber-400">
-            No approved SRS found. Approve an SRS before generating architecture.
+            No confirmed SRS found — confirm an SRS before generating architecture.
           </p>
         ) : null}
         {eligibleSrs.length > 0 && eligiblePrds.length === 0 ? (
           <p className="mt-3 text-sm text-amber-400">
-            No approved PRD found. Approve a PRD linked to your SRS first.
+            No confirmed PRD found — the SRS must be linked to a confirmed PRD.
           </p>
         ) : null}
         {selectedSrsId && !canGenerate && eligiblePrds.length > 0 ? (
@@ -336,7 +380,10 @@ export default function ArchitectureListPage() {
               >
                 <div>
                   <p className="font-medium text-white">
-                    {a.display_name ?? `Architecture v${a.version}`}
+                    {a.display_name
+                      ?? (selectedProject?.name
+                          ? `${selectedProject.name} — Architecture v${a.version}`
+                          : `Architecture v${a.version}`)}
                   </p>
                   <p className="text-xs text-gray-500">
                     {done}/{DOCS_TOTAL} documents complete
@@ -346,16 +393,27 @@ export default function ArchitectureListPage() {
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span
-                    className={`rounded-full border px-2 py-0.5 text-xs ${statusBadgeClass(a.status)}`}
-                  >
-                    {a.status}
-                  </span>
+                  <WorkflowStatusBadge status={a.status} />
+                  {a.status === "finalized" && (
+                    <span title="Finalized — cannot delete">
+                      <i className="ti ti-lock text-xs text-emerald-600" aria-hidden />
+                    </span>
+                  )}
                   <Link href={`/architecture/${a.id}`}>
                     <Button variant="outline" size="sm">
                       Open
                     </Button>
                   </Link>
+                  <button
+                    onClick={() => void handleDelete(a.id)}
+                    disabled={a.status === "finalized" || deletingId === a.id}
+                    title={a.status === "finalized" ? "Finalized architecture cannot be deleted" : "Delete architecture"}
+                    className="flex h-8 w-8 items-center justify-center rounded border border-red-900/40 bg-red-950/20 text-red-500 hover:border-red-700/60 hover:bg-red-950/40 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30 transition-colors"
+                  >
+                    {deletingId === a.id
+                      ? <i className="ti ti-loader-2 animate-spin text-sm" aria-hidden />
+                      : <i className="ti ti-trash text-sm" aria-hidden />}
+                  </button>
                 </div>
               </div>
             );

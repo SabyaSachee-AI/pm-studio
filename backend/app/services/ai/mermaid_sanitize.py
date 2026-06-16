@@ -107,6 +107,33 @@ def _fix_flowchart(chart: str) -> str:
     return chart
 
 
+def _fix_er_direction(chart: str) -> str:
+    """erDiagram does not accept a direction keyword — strip it."""
+    if not re.match(r"^erDiagram", chart, re.I | re.M):
+        return chart
+    return re.sub(r"^erDiagram\s+(LR|TD|RL|BT|TB)\s*", "erDiagram\n", chart, flags=re.I | re.M)
+
+
+def _remove_flowchart_notes(chart: str) -> str:
+    """Remove 'note left/right/over' lines that are not valid in flowchart."""
+    if not re.match(r"^flowchart", chart, re.I | re.M):
+        return chart
+    return "\n".join(
+        line for line in chart.split("\n")
+        if not re.match(r"^\s*note\s+(left|right|over)\s+", line, re.I)
+    )
+
+
+def _fix_arrow_spacing(chart: str) -> str:
+    """Normalise all arrow variants to exactly one space on each side."""
+    chart = re.sub(r"(\w)\s*-->>\s*(\w)", r"\1 -->> \2", chart)
+    chart = re.sub(r"(\w)\s*-->\s*(\w)", r"\1 --> \2", chart)
+    chart = re.sub(r"(\w)\s*==>\s*(\w)", r"\1 ==> \2", chart)
+    chart = re.sub(r"(\w)\s*-\.->\s*(\w)", r"\1 -.-> \2", chart)
+    chart = re.sub(r"(\w)\s*---\s*(\w)", r"\1 --- \2", chart)
+    return chart
+
+
 def sanitize_mermaid(raw: str) -> str:
     if not raw or not str(raw).strip():
         return ""
@@ -136,18 +163,21 @@ def sanitize_mermaid(raw: str) -> str:
     chart = re.sub(r"^graph\s+TB\b", "flowchart TD", chart, flags=re.M)
 
     chart = _expand_single_line_er(chart)
+    chart = _fix_er_direction(chart)
     chart = _fix_sequence(chart)
     chart = _fix_er(chart)
     chart = _fix_flowchart(chart)
+    chart = _remove_flowchart_notes(chart)
 
+    # Fix single-arrow sequence syntax: A -> B: label → A ->> B: label
     chart = re.sub(
         r"^(\s*)([\w ]+?)\s*->\s*([\w ]+?)\s*:",
         r"\1\2->>\3:",
         chart,
         flags=re.M,
     )
-    chart = re.sub(r"(\w)\s+->>\s*(\w)", r"\1->>\2", chart)
-    chart = re.sub(r"(\w)\s+-->\s*(\w)", r"\1-->\2", chart)
+
+    chart = _fix_arrow_spacing(chart)
 
     opens = len(re.findall(r"^\s*subgraph\b", chart, re.M))
     closes = len(re.findall(r"^\s*end\b", chart, re.M))

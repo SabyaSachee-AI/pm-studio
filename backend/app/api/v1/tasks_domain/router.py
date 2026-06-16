@@ -11,6 +11,9 @@ from app.core.database import get_db
 from app.models.task import Task
 from app.models.task_spec import TaskSpec, TaskSpecStatus
 from app.models.user import User
+from app.models.requirement import Requirement
+from app.models.prd import PRD, PRDStatus
+from sqlalchemy.orm import selectinload
 from app.schemas.module import ModuleExtractRequest
 from app.schemas.task import (
     KanbanBoard,
@@ -25,6 +28,13 @@ from app.models.srs import SRS, SRSStatus
 from app.workers.module_tasks import extract_modules_task
 from app.workers.orchestration_tasks import generate_orchestration_task
 from app.services.task.bible_builder import build_project_bible
+from app.services.task.coverage import (
+    compute_coverage,
+    covered_fr_ids,
+    extract_fr_ids,
+    normalize_fr_id,
+)
+from app.services.prd.source import get_finalized_prd_body, prd_eligible_for_downstream
 from app.services.task.service import (
     create_task,
     delete_task,
@@ -69,7 +79,7 @@ async def extract_modules(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_screen_permission("tasks", "edit")),
 ) -> dict[str, str]:
-    """Extract modules from approved SRS and seed Kanban tasks."""
+    """Extract modules from approved PRD + SRS and seed Kanban tasks (uses finalized architecture when available)."""
     srs_result = await db.execute(
         select(SRS).where(
             SRS.id == body.srs_id,
@@ -90,6 +100,21 @@ async def extract_modules(
     if not srs_eligible:
         raise HTTPException(status_code=400, detail="SRS must be approved or finalized")
 
+    if not srs.prd_id:
+        raise HTTPException(
+            status_code=400,
+            detail="SRS must be linked to an approved PRD before task generation",
+        )
+    prd_result = await db.execute(
+        select(PRD).where(PRD.id == srs.prd_id, PRD.deleted_at.is_(None))
+    )
+    prd = prd_result.scalar_one_or_none()
+    if prd is None or not prd_eligible_for_downstream(prd):
+        raise HTTPException(
+            status_code=400,
+            detail="An approved or finalized PRD is required before task generation",
+        )
+
     arch_result = await db.execute(
         select(Architecture).where(
             Architecture.project_id == body.project_id,
@@ -98,7 +123,7 @@ async def extract_modules(
         )
     )
     arch = arch_result.scalars().first()
-    arch_warning = None if arch else "No finalized architecture found — extracting from SRS only"
+    arch_warning = None if arch else "No finalized architecture suite found — generating from PRD + SRS only"
 
     celery_task = extract_modules_task.delay(
         str(body.project_id),
@@ -192,24 +217,14 @@ async def get_task_coverage(
     if not srs or not srs.content_json:
         return {"total": 0, "covered": 0, "missing": [], "has_tasks": False}
 
-    all_frs: list[str] = [
-        fr.get("fr_number", "")
-        for fr in (srs.content_json or {}).get("functional_requirements", [])
-        if fr.get("fr_number")
-    ]
+    all_frs = extract_fr_ids(srs.content_json)
 
     tasks_result = await db.execute(
         select(Task).where(Task.project_id == project_id, Task.deleted_at.is_(None))
     )
     tasks = tasks_result.scalars().all()
 
-    covered: set[str] = set()
-    for t in tasks:
-        if t.linked_fr:
-            covered.add(t.linked_fr)
-        for fr in (t.fr_references or []):
-            covered.add(fr)
-
+    covered = covered_fr_ids(tasks)
     missing = [f for f in all_frs if f not in covered]
 
     # Spec coverage
@@ -391,3 +406,176 @@ async def delete_task_endpoint(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     await delete_task(db, task)
+
+
+@router.get("/traceability/{project_id}")
+async def get_project_traceability(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "view")),
+) -> dict:
+    """Return requirement ➔ PRD ➔ SRS ➔ task ➔ spec traceability tree."""
+    project_result = await db.execute(
+        select(Project).where(Project.id == project_id, Project.deleted_at.is_(None))
+    )
+    project = project_result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Fetch latest Requirement
+    req_result = await db.execute(
+        select(Requirement)
+        .where(Requirement.project_id == project_id, Requirement.deleted_at.is_(None))
+        .order_by(Requirement.created_at.desc())
+        .limit(1)
+    )
+    requirement = req_result.scalar_one_or_none()
+
+    # Fetch latest PRD
+    prd_result = await db.execute(
+        select(PRD)
+        .where(PRD.project_id == project_id, PRD.deleted_at.is_(None))
+        .order_by(PRD.created_at.desc())
+        .limit(1)
+    )
+    prd = prd_result.scalar_one_or_none()
+
+    # Fetch latest SRS
+    srs_result = await db.execute(
+        select(SRS)
+        .where(SRS.project_id == project_id, SRS.deleted_at.is_(None))
+        .order_by(SRS.created_at.desc())
+        .limit(1)
+    )
+    srs = srs_result.scalar_one_or_none()
+
+    # Fetch latest Architecture
+    arch_result = await db.execute(
+        select(Architecture)
+        .where(Architecture.project_id == project_id, Architecture.deleted_at.is_(None))
+        .order_by(Architecture.created_at.desc())
+        .limit(1)
+    )
+    arch = arch_result.scalar_one_or_none()
+
+    # Fetch all non-deleted tasks and their specs
+    tasks_result = await db.execute(
+        select(Task)
+        .options(selectinload(Task.spec))
+        .where(Task.project_id == project_id, Task.deleted_at.is_(None))
+        .order_by(Task.order_index.asc())
+    )
+    tasks = tasks_result.scalars().all()
+
+    requirement_data = None
+    if requirement:
+        requirement_data = {
+            "id": str(requirement.id),
+            "original_filename": requirement.original_filename,
+            "status": requirement.status.value,
+            "gaps": (requirement.analysis_result or {}).get("gaps") or [],
+        }
+
+    prd_data = None
+    if prd:
+        prd_body = get_finalized_prd_body(prd.content_json) or (prd.content_json or {})
+        raw_features = prd_body.get("features") or []
+        normalized_features = []
+        for feat in raw_features:
+            feat_id = feat.get("id") or feat.get("feature_id") or ""
+            normalized_features.append({
+                "id":          feat_id,
+                "title":       feat.get("title", ""),
+                "description": feat.get("description", ""),
+                "priority":    feat.get("priority", "medium"),
+                "complexity":  feat.get("complexity"),
+            })
+        prd_data = {
+            "id": str(prd.id),
+            "status": prd.status.value,
+            "version": prd.version,
+            "features": normalized_features,
+        }
+
+    srs_data = None
+    if srs:
+        # Normalize each FR so that `id` is always the fr_number value.
+        # Raw SRS JSON uses "fr_number" as the identifier; the frontend expects "id".
+        raw_frs = (srs.content_json or {}).get("functional_requirements") or []
+        normalized_frs = []
+        for fr in raw_frs:
+            fr_id = normalize_fr_id(fr.get("fr_number") or fr.get("id") or "")
+            normalized_frs.append({
+                "id":             fr_id,
+                "fr_number":      fr_id,
+                "title":          fr.get("title", ""),
+                "description":    fr.get("description", ""),
+                "priority":       fr.get("priority", "medium"),
+                "inputs":         fr.get("inputs"),
+                "processing":     fr.get("processing"),
+                "outputs":        fr.get("outputs"),
+                "linked_feature": fr.get("linked_feature"),
+            })
+        srs_data = {
+            "id": str(srs.id),
+            "status": srs.status.value,
+            "version": srs.version,
+            "functional_requirements": normalized_frs,
+        }
+
+    architecture_data = None
+    if arch:
+        architecture_data = {
+            "id": str(arch.id),
+            "status": arch.status.value,
+            "version": arch.version,
+            "docs": {
+                "system_arch": {"status": arch.doc_system_arch_status or "pending", "has_content": arch.doc_system_arch is not None},
+                "database": {"status": arch.doc_database_status or "pending", "has_content": arch.doc_database is not None},
+                "api": {"status": arch.doc_api_status or "pending", "has_content": arch.doc_api is not None},
+                "frontend": {"status": arch.doc_frontend_status or "pending", "has_content": arch.doc_frontend is not None},
+                "security": {"status": arch.doc_security_status or "pending", "has_content": arch.doc_security is not None},
+                "uiux": {"status": arch.doc_uiux_status or "pending", "has_content": arch.doc_uiux is not None},
+            }
+        }
+
+    tasks_data = []
+    for task in tasks:
+        spec_data = None
+        if task.spec:
+            spec_data = {
+                "id": str(task.spec.id),
+                "status": task.spec.status.value,
+                "content_json": task.spec.content_json,
+            }
+        tasks_data.append({
+            "id": str(task.id),
+            "title": task.title,
+            "description": task.description,
+            "status": task.status.value,
+            "task_type": task.task_type.value,
+            "priority": task.priority.value,
+            "linked_fr": normalize_fr_id(task.linked_fr) if task.linked_fr else None,
+            "fr_references": [normalize_fr_id(r) for r in (task.fr_references or [])],
+            "module_name": task.module_name,
+            "suggested_file": task.suggested_file,
+            "suggested_endpoint": task.suggested_endpoint,
+            "suggested_table": task.suggested_table,
+            "spec": spec_data,
+        })
+
+    # Authoritative coverage — shared helper (normalized FR ids) so the
+    # traceability matrix, the /coverage endpoint, and the gap-fill worker
+    # always agree on which FRs are missing.
+    coverage = compute_coverage(srs.content_json if srs else None, tasks)
+
+    return {
+        "project_id":   str(project_id),
+        "project_name": project.name,
+        "requirement":  requirement_data,
+        "prd":          prd_data,
+        "srs":          srs_data,
+        "architecture": architecture_data,
+        "tasks":        tasks_data,
+        "coverage":     coverage,
+    }

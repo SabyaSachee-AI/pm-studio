@@ -49,3 +49,4 @@ class RequirementResponse(BaseModel):
     cost_estimate: Optional[dict] = None
     error_message: Optional[str] = None
     created_at: datetime
+    updated_at: datetime

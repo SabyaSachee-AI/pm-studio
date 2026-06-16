@@ -83,9 +83,13 @@ class Architecture(TimeStampedModel):
         nullable=True,
     )
     generation_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    doc_task_ids: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    doc_task_ids: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=lambda: {}
+    )
     generation_progress: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
-    doc_cancel_flags: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    doc_cancel_flags: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=lambda: {}
+    )
     can_resume: Mapped[bool] = mapped_column(nullable=False, default=False)
     last_error: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     resume_from: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -99,12 +103,24 @@ class Architecture(TimeStampedModel):
     doc_security: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     doc_uiux: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
-    doc_system_arch_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    doc_database_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    doc_api_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    doc_frontend_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    doc_security_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    doc_uiux_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    doc_system_arch_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DocGenerationStatus.pending.value, server_default="pending"
+    )
+    doc_database_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DocGenerationStatus.pending.value, server_default="pending"
+    )
+    doc_api_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DocGenerationStatus.pending.value, server_default="pending"
+    )
+    doc_frontend_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DocGenerationStatus.pending.value, server_default="pending"
+    )
+    doc_security_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DocGenerationStatus.pending.value, server_default="pending"
+    )
+    doc_uiux_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=DocGenerationStatus.pending.value, server_default="pending"
+    )
 
     project: Mapped["Project"] = relationship("Project")
     srs: Mapped["SRS"] = relationship("SRS")

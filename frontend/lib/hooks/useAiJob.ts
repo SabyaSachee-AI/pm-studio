@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { TaskStatus } from "@/lib/api";
+import {
+  playCompletionChime,
+  playErrorTone,
+  startAmbientLoop,
+  stopAmbientLoop,
+} from "@/lib/sound";
 
 export type AiJobStatus = "idle" | "pending" | "processing" | "completed" | "failed";
 
@@ -13,7 +19,7 @@ const PROCESSING_MESSAGES: Record<string, string> = {
   "Generating PRD": "Writing product requirements...",
   "Generating SRS": "Writing technical specifications...",
   "Generating architecture": "Building 6 architecture documents...",
-  "Extracting modules": "Breaking SRS into Kanban tasks...",
+  "Extracting modules": "Breaking PRD + SRS into Kanban tasks…",
   "Generating spec": "Writing technical task specification...",
 };
 
@@ -78,6 +84,7 @@ export function useAiJob(options: UseAiJobOptions = {}) {
 
   const timerRef = useRef<number | null>(null);
   const pollRef = useRef<number | null>(null);
+  const progressPollRef = useRef<number | null>(null);
   const hideRef = useRef<number | null>(null);
   const messageRotateRef = useRef<number | null>(null);
   const taskIdRef = useRef<string | null>(null);
@@ -99,6 +106,10 @@ export function useAiJob(options: UseAiJobOptions = {}) {
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
+    }
+    if (progressPollRef.current) {
+      clearInterval(progressPollRef.current);
+      progressPollRef.current = null;
     }
     if (hideRef.current) {
       clearTimeout(hideRef.current);
@@ -146,6 +157,8 @@ export function useAiJob(options: UseAiJobOptions = {}) {
       isManualRef.current = false;
       if (tokens !== undefined) setTokenCount(tokens);
       setStatus("completed");
+      try { stopAmbientLoop(); playCompletionChime(); } catch { /* audio optional */ }
+      window.dispatchEvent(new CustomEvent("pm-studio:generating", { detail: { active: false } }));
       onCompleteRef.current?.({
         elapsedSeconds: elapsedRef.current,
         tokenCount: tokens,
@@ -163,6 +176,8 @@ export function useAiJob(options: UseAiJobOptions = {}) {
       isManualRef.current = false;
       setErrorMessage(error);
       setStatus("failed");
+      try { stopAmbientLoop(); playErrorTone(); } catch { /* audio optional */ }
+      window.dispatchEvent(new CustomEvent("pm-studio:generating", { detail: { active: false } }));
       onFailedRef.current?.({
         elapsedSeconds: elapsedRef.current,
         errorMessage: error,
@@ -185,7 +200,7 @@ export function useAiJob(options: UseAiJobOptions = {}) {
         if (tokens !== undefined) setTokenCount(tokens);
 
         if (data.meta && typeof data.meta === "object") {
-          setTaskMeta(data.meta);
+          setTaskMeta(data.meta as TaskStatus["meta"]);
         }
 
         if (mapped === "pending") setStatus("pending");
@@ -206,6 +221,18 @@ export function useAiJob(options: UseAiJobOptions = {}) {
     [completeJob, failJob],
   );
 
+  const pollSyncProgress = useCallback(async (progressId: string) => {
+    try {
+      const data = await api.getSyncProgress(progressId);
+      if (data.meta && Object.keys(data.meta).length > 0) {
+        setTaskMeta(data.meta);
+        if (data.status === "PROGRESS") setStatus("processing");
+      }
+    } catch {
+      // Ignore transient errors while the sync request is still running.
+    }
+  }, []);
+
   const startJob = useCallback(
     (taskId: string, opName: string) => {
       clearTimers();
@@ -216,6 +243,8 @@ export function useAiJob(options: UseAiJobOptions = {}) {
       setErrorMessage(undefined);
       setTaskMeta(null);
       setStatus("pending");
+      try { startAmbientLoop(); } catch { /* audio optional */ }
+      window.dispatchEvent(new CustomEvent("pm-studio:generating", { detail: { active: true } }));
       startElapsedTimer();
       startMessageRotation();
       void pollTask(taskId);
@@ -228,6 +257,7 @@ export function useAiJob(options: UseAiJobOptions = {}) {
 
   const reset = useCallback(() => {
     clearTimers();
+    try { stopAmbientLoop(); } catch { /* audio optional */ }
     taskIdRef.current = null;
     isManualRef.current = false;
     setStatus("idle");
@@ -244,18 +274,27 @@ export function useAiJob(options: UseAiJobOptions = {}) {
   }, [reset]);
 
   const startManual = useCallback(
-    (opName: string) => {
+    (opName: string, progressId?: string) => {
       clearTimers();
       isManualRef.current = true;
       taskIdRef.current = null;
       setOperationName(opName);
       setTokenCount(undefined);
       setErrorMessage(undefined);
+      setTaskMeta(null);
       setStatus("processing");
+      try { startAmbientLoop(); } catch { /* audio optional */ }
+      window.dispatchEvent(new CustomEvent("pm-studio:generating", { detail: { active: true } }));
       startElapsedTimer();
       startMessageRotation();
+      if (progressId) {
+        void pollSyncProgress(progressId);
+        progressPollRef.current = window.setInterval(() => {
+          void pollSyncProgress(progressId);
+        }, 2000);
+      }
     },
-    [clearTimers, startElapsedTimer, startMessageRotation],
+    [clearTimers, pollSyncProgress, startElapsedTimer, startMessageRotation],
   );
 
   const completeManual = useCallback(

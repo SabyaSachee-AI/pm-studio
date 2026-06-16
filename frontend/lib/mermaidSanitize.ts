@@ -73,11 +73,51 @@ function fixFlowchart(chart: string): string {
   return text;
 }
 
-/** Ensure arrows have spaces between node ids: API-->DB → API --> DB */
+function fixErDiagram(chart: string): string {
+  if (!/^erDiagram/im.test(chart)) return chart;
+  return chart
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.toLowerCase() === "erdiagram") return line;
+      // Ensure relationship tokens are uppercase
+      if (/(\|\||--|\.\.|}o|o\{)/.test(trimmed)) {
+        return line.replace(
+          /^(\s*)([A-Z0-9_]+)(\s+(?:\|\||}o|o\{|\.\.)[^"]+?)(\s+)([a-z][a-z0-9_]*)(\s*(:.*)?)?$/i,
+          (_m, indent, left, rel, sp, right, rest = "") =>
+            `${indent}${left.toUpperCase()}${rel}${sp}${right.toUpperCase()}${rest}`,
+        );
+      }
+      return line;
+    })
+    .join("\n");
+}
+
+/** Normalise all arrow variants to have exactly one space on each side */
 function fixArrowSpacing(chart: string): string {
   return chart
-    .replace(/(\w)-->>(\w)/g, "$1 -->> $2")
-    .replace(/(\w)-->(\w)/g, "$1 --> $2");
+    // sequence: -->> and -->
+    .replace(/(\w)\s*-->>\s*(\w)/g, "$1 -->> $2")
+    .replace(/(\w)\s*-->\s*(\w)/g, "$1 --> $2")
+    // flowchart arrows: --> --- ==> -.->
+    .replace(/(\w)\s*==>\s*(\w)/g, "$1 ==> $2")
+    .replace(/(\w)\s*-\.->\s*(\w)/g, "$1 -.-> $2")
+    .replace(/(\w)\s*---\s*(\w)/g, "$1 --- $2");
+}
+
+/** Strip direction prefix from erDiagram if present (invalid) */
+function fixErDirection(chart: string): string {
+  if (!/^erDiagram/im.test(chart)) return chart;
+  return chart.replace(/^erDiagram\s+(LR|TD|RL|BT|TB)\s*/im, "erDiagram\n");
+}
+
+/** Remove note statements in flowcharts that Mermaid doesn't support */
+function removeFlowchartNotes(chart: string): string {
+  if (!/^flowchart/im.test(chart)) return chart;
+  return chart
+    .split("\n")
+    .filter((line) => !/^\s*note\s+(left|right|over)\s+/i.test(line))
+    .join("\n");
 }
 
 export function sanitizeMermaid(chart: string): string {
@@ -109,8 +149,11 @@ export function sanitizeMermaid(chart: string): string {
   text = text.replace(/^graph\s+TB\b/gim, "flowchart TD");
 
   text = expandSingleLineEr(text);
+  text = fixErDirection(text);
   text = fixSequence(text);
+  text = fixErDiagram(text);
   text = fixFlowchart(text);
+  text = removeFlowchartNotes(text);
   text = fixArrowSpacing(text);
 
   const opens = (text.match(/^\s*subgraph\b/gim) ?? []).length;

@@ -11,7 +11,9 @@ import {
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
+import { FinalizedBadge, finalizedBadgeClassName } from "@/components/ui/FinalizedBadge";
 import { Button } from "@/components/ui/button";
+import { PrdFormalDocument } from "@/components/features/prd/PrdFormalDocument";
 import { GeneratedDocActions } from "@/components/ui/GeneratedDocActions";
 import { ModelSelect } from "@/components/ui/ModelSelect";
 import { ScreenModelSelector } from "@/components/ui/ScreenModelSelector";
@@ -30,6 +32,14 @@ import {
   aiButtonLabel,
   useAiJob,
 } from "@/lib/hooks/useAiJob";
+import {
+  PRD_PRINT_STYLES,
+  getFinalizedPrdBody,
+  isPrdLocked,
+  prdDocumentStatusLabel,
+  resolvePrdDocumentFields,
+  stripPrdMeta,
+} from "@/lib/prdDocument";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
@@ -40,8 +50,6 @@ const STEPS = [
   { num: 3, label: "Review Draft" },
   { num: 4, label: "Confirm" },
   { num: 5, label: "Finalized" },
-  { num: 6, label: "Edit" },
-  { num: 7, label: "Save to KB" },
 ] as const;
 
 type EnrichedPRD = PRD & {
@@ -67,8 +75,7 @@ function getMeta(content: Record<string, unknown>): PrdMeta {
 }
 
 function stripMeta(content: Record<string, unknown>): Record<string, unknown> {
-  const { _meta: _, ...rest } = content;
-  return rest;
+  return stripPrdMeta(content);
 }
 
 function priorityBadgeClass(priority: string): string {
@@ -95,11 +102,13 @@ function StepProgressBar({
             <div key={step.num} className="flex items-center gap-1">
               <span
                 className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                  isActive
-                    ? "border-blue-500 bg-blue-900/50 text-blue-200"
-                    : isComplete
-                      ? "border-green-700 bg-green-900/30 text-green-300"
-                      : "border-gray-700 bg-gray-900 text-gray-500"
+                  step.label === "Finalized" && (isComplete || isActive)
+                    ? finalizedBadgeClassName
+                    : isActive
+                      ? "border-blue-500 bg-blue-900/50 text-blue-200"
+                      : isComplete
+                        ? "border-green-700 bg-green-900/30 text-green-300"
+                        : "border-gray-700 bg-gray-900 text-gray-500"
                 }`}
               >
                 {isComplete && !isActive ? "✓ " : ""}
@@ -411,8 +420,6 @@ export default function PrdDetailPage() {
   const isConfirmed = meta.workflow_confirmed === true || prd?.status === "submitted";
 
   const derivedStep = useMemo(() => {
-    if (showKbDialog) return 7;
-    if (editMode) return 6;
     if (isFinalized) return 5;
     if (showConfirmModal) return 4;
     if (qualityResult) return 3;
@@ -421,11 +428,9 @@ export default function PrdDetailPage() {
   }, [
     aiJob.isRunning,
     content,
-    editMode,
     isFinalized,
     qualityResult,
     showConfirmModal,
-    showKbDialog,
   ]);
 
   const currentStep = manualStep ?? derivedStep;
@@ -569,9 +574,12 @@ export default function PrdDetailPage() {
         ? new Date(String(meta.client_approved_at)).toLocaleDateString()
         : "";
       return (
-        <p className="text-sm text-green-300">
-          ✅ Approved by client{date ? ` on ${date}` : ""}
-        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <FinalizedBadge label="Approved" className="text-xs" />
+          {date ? (
+            <span className="text-sm text-gray-400">by client on {date}</span>
+          ) : null}
+        </div>
       );
     }
     if (status === "changes_requested") {
@@ -603,6 +611,17 @@ export default function PrdDetailPage() {
     : new Date().toLocaleDateString();
 
   const displayContent = content ? stripMeta(content) : null;
+  const printStatusLabel = prdDocumentStatusLabel(prd.status, meta);
+  const clientApproved =
+    prd.status === "approved" || meta.client_approval_status === "approved";
+  const clientApprovedDate =
+    typeof meta.client_approved_at === "string"
+      ? new Date(String(meta.client_approved_at)).toLocaleDateString(undefined, {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        })
+      : undefined;
 
   const generatingPrd =
     aiJob.operationName === "Generating PRD" && aiJob.isVisible;
@@ -625,15 +644,7 @@ export default function PrdDetailPage() {
   return (
     <>
       <style>{`
-        @page { size: A4 landscape; margin: 1.5cm; }
-        @media print {
-          aside, header, nav, .no-print { display: none !important; }
-          main { padding: 0 !important; overflow: visible !important; }
-          body { background: #fff !important; color: #000 !important; }
-          .print-document { color: #000 !important; background: #fff !important; }
-          .print-only { display: block !important; }
-        }
-        .print-only { display: none; }
+        ${PRD_PRINT_STYLES}
         @keyframes progress-pulse {
           0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; }
         }
@@ -810,6 +821,7 @@ export default function PrdDetailPage() {
             <h1 className="text-2xl font-semibold">
               {project?.name ?? "Project"} PRD
             </h1>
+            {isFinalized ? <FinalizedBadge label="PRD finalized" /> : null}
             <div className="flex flex-wrap items-center gap-3">
               <ScreenModelSelector screen="prds" />
               <ModelSelect value={aiModel} onChange={setAiModel} />
@@ -984,6 +996,43 @@ export default function PrdDetailPage() {
                 </div>
               </div>
 
+              {/* Client review link — share before finalizing */}
+              <div className="rounded-xl border border-gray-700 bg-gray-900 p-4">
+                <p className="text-sm font-medium text-gray-300">🔗 Client review link</p>
+                <p className="mt-1 text-xs text-gray-500">Share this link with the client to collect feedback before you finalize</p>
+                <div className="mt-2 flex items-center gap-2">
+                  <code className="flex-1 truncate rounded bg-gray-950 px-2 py-1 text-xs">
+                    {portalUrl}
+                  </code>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(portalUrl);
+                      setPortalCopied(true);
+                      window.setTimeout(() => setPortalCopied(false), 2000);
+                    }}
+                  >
+                    {portalCopied ? "Copied!" : "Copy"}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Edit PRD — manual edit before finalizing */}
+              <div className="flex items-center gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setEditContent({ ...displayContent, _meta: content._meta });
+                    setEditMode(true);
+                    setManualStep(null);
+                  }}
+                >
+                  ✏️ Edit PRD
+                </Button>
+                <span className="text-xs text-gray-500">Make manual edits before finalizing</span>
+              </div>
+
               {versionHistory.length > 0 ? (
                 <div className="rounded-xl border border-gray-800 p-4">
                   <button
@@ -1010,8 +1059,10 @@ export default function PrdDetailPage() {
           {/* STEP 5 — FINALIZED */}
           {(currentStep === 5 || isFinalized) && content && displayContent && !editMode ? (
             <div className="no-print space-y-6">
-              <div className="rounded-xl border border-green-800 bg-green-900/20 p-6">
-                <h2 className="text-lg font-semibold text-green-200">✅ PRD FINALIZED</h2>
+              <div className="rounded-xl border border-green-800 bg-green-950/40 p-6">
+                <div className="flex flex-wrap items-center gap-3">
+                  <FinalizedBadge label="PRD finalized" className="text-sm" />
+                </div>
                 <p className="mt-2 text-sm text-gray-300">
                   Version: {prd.version} | Date: {confirmedDate}
                 </p>
@@ -1074,7 +1125,7 @@ export default function PrdDetailPage() {
                   onClick={() => {
                     setEditContent({ ...displayContent, _meta: content._meta });
                     setEditMode(true);
-                    setManualStep(6);
+                    setManualStep(null);
                   }}
                 >
                   ✏️ Edit PRD
@@ -1083,7 +1134,6 @@ export default function PrdDetailPage() {
                   variant="outline"
                   onClick={() => {
                     setShowKbDialog(true);
-                    setManualStep(7);
                     setKbTitle(`${project?.name ?? "Project"} PRD v${prd.version}`);
                   }}
                 >
@@ -1097,7 +1147,7 @@ export default function PrdDetailPage() {
             </div>
           ) : null}
 
-          {/* STEP 6 — EDIT */}
+          {/* EDIT MODE — overlays finalized or review view */}
           {editMode && editContent ? (
             <div className="no-print space-y-4">
               <h2 className="text-lg font-medium">✏️ Edit PRD</h2>
@@ -1131,67 +1181,24 @@ export default function PrdDetailPage() {
         </div>
       </div>
 
-      {/* PRINT DOCUMENT */}
+      {/* PRINT DOCUMENT — A4 portrait */}
       {displayContent ? (
-        <div className="print-only mt-8 font-serif text-black">
-          <div className="text-center">
-            <h1 className="text-xl font-bold">PRODUCT REQUIREMENTS DOCUMENT</h1>
-          </div>
-          <table className="mt-6 w-full text-sm">
-            <tbody>
-              <tr><td className="w-24 font-semibold">Project</td><td>{project?.name}</td></tr>
-              <tr><td className="font-semibold">Client</td><td>{clientName}</td></tr>
-              <tr><td className="font-semibold">Version</td><td>v{prd.version}</td></tr>
-              <tr><td className="font-semibold">Date</td><td>{confirmedDate}</td></tr>
-              <tr><td className="font-semibold">Prepared</td><td>{confirmedBy}</td></tr>
-              <tr><td className="font-semibold">Status</td><td>FINALIZED</td></tr>
-            </tbody>
-          </table>
-          <hr className="my-4 border-black" />
-          <h2 className="text-sm font-bold">1. EXECUTIVE SUMMARY</h2>
-          <p className="mt-2 text-xs whitespace-pre-wrap">{String(displayContent.executive_summary)}</p>
-          <h2 className="mt-4 text-sm font-bold">2. PROBLEM STATEMENT</h2>
-          <p className="mt-2 text-xs whitespace-pre-wrap">{String(displayContent.problem_statement)}</p>
-          <h2 className="mt-4 text-sm font-bold">3. TARGET USERS</h2>
-          <ul className="mt-2 list-disc pl-5 text-xs">
-            {((displayContent.target_users as string[]) ?? []).map((u, i) => (
-              <li key={i}>{u}</li>
-            ))}
-          </ul>
-          <h2 className="mt-4 text-sm font-bold">4. FEATURES</h2>
-          {((displayContent.features as FeatureRecord[]) ?? []).map((f, i) => (
-            <div key={i} className="mt-2 text-xs">
-              <p>
-                <strong>{String(f.id)}: {String(f.title)}</strong> [{String(f.priority).toUpperCase()}]
-                {f.depends_on ? ` (Depends on: ${String(f.depends_on)})` : ""}
-              </p>
-              <p>Description: {String(f.description)}</p>
-              <p>Acceptance criteria:</p>
-              <ul className="list-none pl-3">
-                {((f.acceptance_criteria as string[]) ?? []).map((c, j) => (
-                  <li key={j}>✓ {c}</li>
-                ))}
-              </ul>
-            </div>
-          ))}
-          <h2 className="mt-4 text-sm font-bold">5. USER STORIES</h2>
-          {((displayContent.user_stories as StoryRecord[]) ?? []).map((s, i) => (
-            <p key={i} className="mt-2 text-xs">
-              {String(s.id)}: As a {String(s.as_a)}, I want to {String(s.i_want_to)} so that {String(s.so_that)}
-            </p>
-          ))}
-          <h2 className="mt-4 text-sm font-bold">6–9. NFR / OUT OF SCOPE / METRICS / RISKS</h2>
-          <SectionList title="" items={displayContent.non_functional_requirements} />
-          <SectionList title="" items={displayContent.out_of_scope} />
-          <SectionList title="" items={displayContent.success_metrics} />
-          <SectionList title="" items={displayContent.risks} />
-          <hr className="my-4 border-black" />
-          <p className="text-xs">Confirmed by: {confirmedBy} | Date: {confirmedDate}</p>
-          <p className="text-xs">Signature: ___________________</p>
-          <p className="mt-2 text-xs">
-            Client approval: {prd.status === "approved" ? "[x] Approved" : "[ ] Pending"}
-          </p>
-        </div>
+        <PrdFormalDocument
+          variant="print"
+          projectName={project?.name}
+          clientName={clientName}
+          version={prd.version}
+          statusLabel={printStatusLabel}
+          confirmedBy={confirmedBy}
+          confirmedDate={confirmedDate}
+          content={displayContent}
+          sourceRequirementName={prd.source_requirement_name ?? undefined}
+          featureCount={Number(stats.feature_count ?? 0)}
+          storyCount={Number(stats.user_story_count ?? 0)}
+          qualityScore={qualityScore}
+          clientApproved={clientApproved}
+          clientApprovedDate={clientApprovedDate}
+        />
       ) : null}
     </>
   );

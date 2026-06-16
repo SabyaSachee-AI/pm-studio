@@ -9,6 +9,7 @@ import type {
   ArchitecturePdfMode,
   DiagramImageMap,
 } from "@/lib/architecturePdfExport";
+import { buildDiagramsForDoc } from "@/lib/architectureDiagrams";
 import { buildDiagramExplanation, buildDiagramStory } from "@/lib/diagramExplanations";
 
 const MARGIN = { top: 20, right: 20, bottom: 20, left: 25 };
@@ -651,7 +652,8 @@ function renderDiagrams(
   doc: Record<string, unknown>,
   diagramImages: DiagramImageMap,
 ): void {
-  const diagrams = (doc.diagrams as Record<string, string>) ?? {};
+  // Same programmatic builders as screen + image collection — keeps names aligned
+  const diagrams = buildDiagramsForDoc(docKey, doc);
   const entries = Object.entries(diagrams).filter(([, src]) => src?.trim());
   if (entries.length === 0) return;
 

@@ -19,7 +19,7 @@ from app.models.architecture import (
     DOC_STATUS_FIELDS,
     DocGenerationStatus,
 )
-from app.models.prd import PRD, PRDStatus
+from app.models.prd import PRD
 from app.models.project import Project
 from app.models.srs import SRS, SRSStatus
 from app.models.user import User
@@ -29,10 +29,13 @@ from app.services.ai.architecture_service import (
     polish_architecture_docs_for_pdf,
 )
 from app.services.ai.model_override import model_override_scope
+from app.services.prd.source import prd_eligible_for_downstream
 from app.workers.architecture_tasks import (
     consolidate_architecture_task,
+    edit_architecture_suite_task,
     generate_architecture_doc_task,
     generate_architecture_task,
+    reassess_architecture_task,
     regenerate_architecture_doc_task,
 )
 
@@ -59,15 +62,12 @@ class ArchitecturePolishExportRequest(BaseModel):
     doc_key: str | None = None
 
 
+class ArchitectureSuiteEditRequest(BaseModel):
+    instruction: str
+
+
 def _prd_eligible(prd: PRD) -> bool:
-    if not prd.content_json:
-        return False
-    if prd.status == PRDStatus.approved:
-        return True
-    meta = (prd.content_json or {}).get("_meta") or {}
-    if meta.get("workflow_finalized") or meta.get("workflow_confirmed"):
-        return True
-    return prd.status == PRDStatus.submitted
+    return prd_eligible_for_downstream(prd)
 
 
 def _srs_eligible(srs: SRS) -> bool:
@@ -196,7 +196,7 @@ async def generate_architecture(
     if not _srs_eligible(srs):
         raise HTTPException(
             status_code=400,
-            detail="SRS must be finalized or approved before architecture generation",
+            detail="SRS must be confirmed or finalized before architecture generation",
         )
 
     if not srs.prd_id:
@@ -211,7 +211,7 @@ async def generate_architecture(
     if prd is None or not _prd_eligible(prd):
         raise HTTPException(
             status_code=400,
-            detail="An approved PRD is required before architecture generation",
+            detail="A confirmed or finalized PRD linked to this SRS is required before architecture generation",
         )
 
     arch = Architecture(
@@ -219,6 +219,12 @@ async def generate_architecture(
         srs_id=body.srs_id,
         status=ArchitectureStatus.draft,
         created_by_id=current_user.id,
+        doc_task_ids={},
+        doc_cancel_flags={},
+        **{
+            status_field: DocGenerationStatus.pending.value
+            for status_field in DOC_STATUS_FIELDS
+        },
     )
     db.add(arch)
     await db.commit()
@@ -331,6 +337,75 @@ async def consolidate_architecture(
         "architecture_id": str(arch.id),
         "task_id": task.id,
         "status": "consolidating",
+    }
+
+
+@router.post("/{arch_id}/reassess", status_code=status.HTTP_202_ACCEPTED)
+async def reassess_architecture(
+    arch_id: UUID,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("architecture", "edit")),
+) -> dict[str, str]:
+    """AI-reassess the whole suite: re-align, AI-repair weak docs, re-score consistency."""
+    arch = await _load_architecture(arch_id, db)
+    incomplete = any(
+        getattr(arch, f"{f}_status") not in {"completed", "generated", "saved"}
+        for f in DOC_FIELDS
+    )
+    if incomplete:
+        raise HTTPException(
+            status_code=400,
+            detail="All 6 documents must be generated before reassessing",
+        )
+
+    task = reassess_architecture_task.delay(
+        str(arch.id), model_provider=model_provider, model_id=model_id,
+    )
+    arch.generation_task_id = task.id
+    arch.generation_progress = {
+        "phase": "reassessing",
+        "message": "Reassessing suite with AI…",
+    }
+    await db.commit()
+    return {
+        "architecture_id": str(arch.id),
+        "task_id": task.id,
+        "status": "reassessing",
+    }
+
+
+@router.post("/{arch_id}/edit-suite", status_code=status.HTTP_202_ACCEPTED)
+async def edit_architecture_suite(
+    arch_id: UUID,
+    body: ArchitectureSuiteEditRequest,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("architecture", "edit")),
+) -> dict[str, str]:
+    """Apply one free-text instruction across all 6 documents, then re-align + re-score."""
+    if not body.instruction.strip():
+        raise HTTPException(status_code=400, detail="Instruction is required")
+    arch = await _load_architecture(arch_id, db)
+    if not any(getattr(arch, f) for f in DOC_FIELDS):
+        raise HTTPException(status_code=400, detail="No architecture documents generated yet")
+
+    task = edit_architecture_suite_task.delay(
+        str(arch.id), body.instruction.strip(),
+        model_provider=model_provider, model_id=model_id,
+    )
+    arch.generation_task_id = task.id
+    arch.generation_progress = {
+        "phase": "suite_editing",
+        "message": "Applying AI edits across the suite…",
+    }
+    await db.commit()
+    return {
+        "architecture_id": str(arch.id),
+        "task_id": task.id,
+        "status": "editing",
     }
 
 

@@ -24,6 +24,7 @@ from app.services.ai.requirement_analysis import (
     synthesize_requirement_draft,
 )
 from app.services.requirement.cost import estimate_cost
+from app.services.ai.job_progress import sync_progress_scope
 from app.services.storage.service import get_local_path, save_upload
 from app.workers.requirement_tasks import process_requirement_task
 
@@ -36,16 +37,50 @@ def _status_value(req: Requirement) -> str:
     return req.status.value
 
 
-def _format_display_name(filename: str, created_at: datetime) -> str:
-    """Build a unique human-readable label: filename — date time."""
-    timestamp = created_at.strftime("%d %b %Y, %I:%M %p")
-    return f"{filename} — {timestamp}"
+def _format_display_name(
+    filename: str,
+    when: datetime,
+    *,
+    finalized: bool = False,
+) -> str:
+    """Build a human-readable label: filename — date (and time for uploads)."""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    if finalized:
+        stamp = when.astimezone(timezone.utc).strftime("%d %b %Y")
+        return f"{filename} — finalized {stamp}"
+    stamp = when.astimezone(timezone.utc).strftime("%d %b %Y, %I:%M %p")
+    return f"{filename} — uploaded {stamp}"
+
+
+def _finalized_timestamp(req: Requirement) -> datetime:
+    """Resolve when a requirement was finalized."""
+    analysis = req.analysis_result or {}
+    raw = analysis.get("finalized_at")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    if req.updated_at:
+        return req.updated_at
+    return req.created_at
 
 
 def _get_display_name(req: Requirement) -> str:
-    """Return stored display_name or derive from filename and upload time."""
-    if req.analysis_result and isinstance(req.analysis_result.get("display_name"), str):
-        return req.analysis_result["display_name"]
+    """Return stored display_name or derive from filename and lifecycle timestamps."""
+    analysis = req.analysis_result or {}
+    if analysis.get("finalized"):
+        stored = analysis.get("display_name")
+        if isinstance(stored, str) and "finalized" in stored:
+            return stored
+        return _format_display_name(
+            req.original_filename,
+            _finalized_timestamp(req),
+            finalized=True,
+        )
+    if isinstance(analysis.get("display_name"), str):
+        return analysis["display_name"]
     return _format_display_name(req.original_filename, req.created_at)
 
 
@@ -75,6 +110,7 @@ def _to_response(req: Requirement) -> RequirementEnrichedResponse:
         cost_estimate=req.cost_estimate_json,
         error_message=req.error_message,
         created_at=req.created_at,
+        updated_at=req.updated_at,
         display_name=_get_display_name(req),
         uploaded_by_name=uploaded_by_name,
     )
@@ -260,8 +296,16 @@ async def patch_requirement(
                 status_code=400,
                 detail="Requirement must be analyzed before finalization",
             )
+        now = datetime.now(timezone.utc)
         updated_analysis = dict(req.analysis_result)
         updated_analysis["finalized"] = True
+        updated_analysis["finalized_at"] = now.isoformat()
+        updated_analysis["finalized_by_name"] = current_user.full_name
+        updated_analysis["display_name"] = _format_display_name(
+            req.original_filename,
+            now,
+            finalized=True,
+        )
         req.analysis_result = updated_analysis
     else:
         try:
@@ -407,6 +451,7 @@ async def upload_feedback_document(
 @router.post("/{requirement_id}/synthesize")
 async def synthesize_requirement(
     requirement_id: UUID,
+    progress_id: str | None = None,
     model_provider: str | None = None,
     model_id: str | None = None,
     db: AsyncSession = Depends(get_db),
@@ -424,7 +469,7 @@ async def synthesize_requirement(
     feedback_text = extract_document_text(local_path, feedback_filename)
 
     analysis_summary = str(req.analysis_result.get("summary", ""))
-    with model_override_scope(model_provider, model_id):
+    with sync_progress_scope(progress_id), model_override_scope(model_provider, model_id):
         draft = await synthesize_requirement_draft(
             original_text=req.extracted_text,
             feedback_text=feedback_text,
@@ -462,6 +507,7 @@ async def synthesize_requirement(
 async def reanalyze_requirement(
     requirement_id: UUID,
     body: ReanalyzeBody,
+    progress_id: str | None = None,
     model_provider: str | None = None,
     model_id: str | None = None,
     db: AsyncSession = Depends(get_db),
@@ -477,7 +523,7 @@ async def reanalyze_requirement(
         raise HTTPException(status_code=400, detail="Instructions are required")
 
     existing = FinalRequirementDraft.model_validate(req.analysis_result["final_draft_json"])
-    with model_override_scope(model_provider, model_id):
+    with sync_progress_scope(progress_id), model_override_scope(model_provider, model_id):
         draft = await rewrite_requirement_draft(existing, instructions)
     draft_dict = draft.model_dump()
 

@@ -27,6 +27,15 @@ from app.services.ai.prd_service import (
     rewrite_prd_ai,
 )
 from app.services.document.versioning import save_document_version
+from app.services.prd.source import (
+    get_finalized_prd_body,
+    is_prd_locked,
+    snapshot_prd_on_finalize,
+)
+from app.services.requirement.source import (
+    get_finalized_draft,
+    is_requirement_finalized,
+)
 from app.workers.prd_tasks import generate_prd_task
 
 router = APIRouter(prefix="/prds", tags=["PRDs"])
@@ -47,8 +56,23 @@ class PRDRewriteRequest(BaseModel):
 
 
 def _requirement_finalized(req: Requirement) -> bool:
+    return is_requirement_finalized(req.analysis_result)
+
+
+def _requirement_ready_for_prd(req: Requirement) -> bool:
+    """Finalized requirements must have a synthesized final draft (any version)."""
     analysis = req.analysis_result or {}
-    return bool(analysis.get("finalized"))
+    if not is_requirement_finalized(analysis):
+        return False
+    return get_finalized_draft(analysis) is not None
+
+
+def _assert_prd_mutable(prd: PRD) -> None:
+    if is_prd_locked(prd):
+        raise HTTPException(
+            status_code=400,
+            detail="PRD is finalized and locked. Cannot modify after confirmation.",
+        )
 
 
 def _prd_workflow_status(prd: PRD) -> str:
@@ -145,6 +169,14 @@ async def generate_prd(
             status_code=400,
             detail="Requirement must be finalized before PRD generation",
         )
+    if not _requirement_ready_for_prd(requirement):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Requirement is finalized but has no final draft. "
+                "Complete feedback synthesis before generating a PRD."
+            ),
+        )
 
     prd = PRD(
         project_id=body.project_id,
@@ -236,6 +268,7 @@ async def update_prd(
 ) -> PRDEnrichedResponse:
     """Edit PRD content and save as a new version."""
     prd = await _load_prd(prd_id, db)
+    _assert_prd_mutable(prd)
     if prd.status == PRDStatus.approved:
         raise HTTPException(status_code=400, detail="Cannot edit an approved PRD")
 
@@ -275,6 +308,7 @@ async def rewrite_prd(
 ) -> PRDEnrichedResponse:
     """Rewrite PRD content based on PM instructions."""
     prd = await _load_prd(prd_id, db)
+    _assert_prd_mutable(prd)
     if not prd.content_json:
         raise HTTPException(status_code=400, detail="PRD has no content to rewrite")
     instructions = body.instructions.strip()
@@ -354,12 +388,16 @@ async def confirm_prd(
         raise HTTPException(status_code=400, detail="PRD has no content to confirm")
 
     content = enrich_prd_content(prd.content_json)
+    now = datetime.now(timezone.utc)
+    content = snapshot_prd_on_finalize(
+        content,
+        version=prd.version,
+        confirmed_by_name=current_user.full_name,
+        confirmed_by_id=str(current_user.id),
+        confirmed_at=now.isoformat(),
+    )
     meta = dict(content.get("_meta") or {})
     meta["workflow_confirmed"] = True
-    meta["workflow_finalized"] = True
-    meta["confirmed_at"] = datetime.now(timezone.utc).isoformat()
-    meta["confirmed_by_name"] = current_user.full_name
-    meta["confirmed_by_id"] = str(current_user.id)
     meta["client_approval_status"] = "pending"
     content["_meta"] = meta
     prd.content_json = content
@@ -379,6 +417,7 @@ async def regenerate_prd(
 ) -> dict[str, str]:
     """Re-queue full PRD generation."""
     prd = await _load_prd(prd_id, db)
+    _assert_prd_mutable(prd)
     prd.content_json = None
     prd.status = PRDStatus.draft
     prd.version = 1
@@ -434,6 +473,27 @@ async def approve_prd(
     prd.status = PRDStatus.approved
     prd.approved_by_id = current_user.id
     prd.approved_at = datetime.now(timezone.utc)
+
+    if prd.content_json:
+        content = enrich_prd_content(prd.content_json)
+        meta = dict(content.get("_meta") or {})
+        meta["client_approval_status"] = "approved"
+        meta["client_approved_at"] = prd.approved_at.isoformat()
+        if not meta.get("finalized_content_json"):
+            content = snapshot_prd_on_finalize(
+                content,
+                version=prd.version,
+                confirmed_by_name=str(meta.get("confirmed_by_name") or current_user.full_name),
+                confirmed_by_id=str(meta.get("confirmed_by_id") or current_user.id),
+                confirmed_at=meta.get("confirmed_at") or prd.approved_at.isoformat(),
+            )
+            meta = dict(content.get("_meta") or {})
+            meta["client_approval_status"] = "approved"
+            meta["client_approved_at"] = prd.approved_at.isoformat()
+        else:
+            content["_meta"] = meta
+        prd.content_json = content
+
     await db.commit()
     await db.refresh(prd)
     return _to_prd_response(prd)

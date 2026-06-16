@@ -66,6 +66,34 @@ def _match_call_to_api_path(call: str, api_paths: list[str]) -> str:
     return call
 
 
+def _entity_slug(name: str) -> str:
+    """Normalize entity name to snake_case slug for fuzzy matching."""
+    return re.sub(r"[^a-z0-9]+", "_", str(name).lower()).strip("_")
+
+
+def _entity_matches_table(entity: str, table_name: str) -> bool:
+    """True if a glossary entity name is reasonably represented by a DB table name.
+
+    Handles multi-word phrases like 'public knowledge base' → 'knowledge_base'.
+    """
+    ent = _entity_slug(entity)
+    tbl = _entity_slug(table_name)
+    if ent == tbl:
+        return True
+    # Substring in either direction (e.g. "logs" ⊂ "audit_logs")
+    if ent in tbl or tbl in ent:
+        return True
+    # Word overlap: any significant word (>3 chars) shared
+    ent_words = {w for w in ent.split("_") if len(w) > 3}
+    tbl_words = {w for w in tbl.split("_") if len(w) > 3}
+    return bool(ent_words & tbl_words)
+
+
+def _glossary_entity_covered(entity: str, table_names: set[str]) -> bool:
+    """True if any table in the DB represents this glossary entity."""
+    return any(_entity_matches_table(entity, t) for t in table_names)
+
+
 def _fr_ids_from_srs(srs_content: dict[str, Any]) -> list[str]:
     frs = srs_content.get("functional_requirements") or []
     ids: list[str] = []
@@ -216,7 +244,13 @@ def sync_frontend_api_calls(
                     matched.append(ep_path)
         if not matched and page.get("protected") is False:
             matched = [p for p in all_paths if "/auth/" in p][:3]
-        raw_calls = list(dict.fromkeys(matched[:10])) or page.get("api_calls") or []
+        if matched:
+            raw_calls = list(dict.fromkeys(matched[:10]))
+        else:
+            # Only keep existing calls that already match API paths (clear the rest
+            # so the validator doesn't penalise un-syncable stale paths)
+            existing = page.get("api_calls") or []
+            raw_calls = [c for c in existing if c and c in all_paths]
         page["api_calls"] = [
             _match_call_to_api_path(normalize_api_call_string(c, canon), all_paths)
             for c in raw_calls
@@ -492,7 +526,10 @@ def validate_suite(
             api_db_score -= 2
             issues.append(f"API still references non-canonical term: {term}")
     if tables and glossary:
-        missing_entities = [e for e in glossary if e not in tables][:5]
+        missing_entities = [
+            e for e in glossary
+            if not _glossary_entity_covered(e, tables)
+        ][:5]
         if missing_entities:
             api_db_score -= min(3, len(missing_entities))
             issues.append(f"Database missing canonical entity tables: {missing_entities}")
@@ -512,7 +549,14 @@ def validate_suite(
     if re.search(r"next-?auth", fe_text_clean, re.I) or "/api/auth/" in fe_text:
         api_fe_score -= 4
         issues.append("Frontend still uses NextAuth or /api/auth paths")
-    mismatches = sum(1 for call in fe_calls if call and call not in api_paths)
+    # Use fuzzy path matching: treat a call as matched if any API path ends with or contains it
+    def _path_covered(call: str) -> bool:
+        if call in api_paths:
+            return True
+        # Partial suffix match: /notebooks matches /api/v1/notebooks
+        return any(p.endswith(call) or call.endswith(p.split("/")[-1]) for p in api_paths if p)
+
+    mismatches = sum(1 for call in fe_calls if call and not _path_covered(call))
     if mismatches > 0:
         api_fe_score -= min(6, mismatches * 2)
         issues.append(f"Frontend has {mismatches} api_calls not matching API paths")

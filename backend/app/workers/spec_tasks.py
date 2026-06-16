@@ -99,7 +99,9 @@ def generate_spec_task(
         if srs is not None:
             prd = db.query(PRD).filter(PRD.id == srs.prd_id).first()
             if prd and prd.content_json:
-                prd_content = prd.content_json
+                from app.services.prd.source import resolve_prd_for_downstream
+
+                prd_content, _ = resolve_prd_for_downstream(prd)
 
         arch = (
             db.query(Architecture)

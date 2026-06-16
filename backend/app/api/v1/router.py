@@ -3,6 +3,8 @@
 from fastapi import APIRouter
 
 from app.api.v1.admin.ai_config.router import router as admin_ai_config_router
+from app.api.v1.admin.screen_permissions.router import router as admin_screen_perms_router
+from app.api.v1.dashboard.router import router as dashboard_router
 from app.api.v1.ai_models.router import router as ai_models_router
 from app.api.v1.architecture.router import router as architecture_router
 from app.api.v1.auth.router import router as auth_router
@@ -24,6 +26,7 @@ from app.api.v1.users.router import router as users_router
 api_router = APIRouter(prefix="")
 
 # Register domain routers here as they are built
+api_router.include_router(dashboard_router)
 api_router.include_router(auth_router)
 api_router.include_router(clients_router)
 api_router.include_router(projects_router)
@@ -40,5 +43,6 @@ api_router.include_router(decisions_router)
 api_router.include_router(notifications_router)
 api_router.include_router(users_router)
 api_router.include_router(admin_ai_config_router)
+api_router.include_router(admin_screen_perms_router)
 api_router.include_router(ai_models_router)
 api_router.include_router(documents_router)

@@ -157,28 +157,86 @@ function ProviderCard({
   );
 }
 
+function fmtNum(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 function UsageBar({ usage }: { usage: ProviderUsage }) {
-  if (!usage.requests_limit && !usage.tokens_limit) return null;
-  const pct = usage.requests_limit
-    ? Math.min(100, Math.round((usage.requests / usage.requests_limit) * 100))
-    : 0;
+  const totalTokens = (usage.tokens_in ?? 0) + (usage.tokens_out ?? 0);
+  const hasActivity = usage.requests > 0 || totalTokens > 0;
+  if (!hasActivity && !usage.requests_limit && !usage.tokens_limit) return null;
+
+  const COLOR_MAP: Record<string, string> = {
+    purple: "bg-purple-500", orange: "bg-orange-500", blue: "bg-blue-500",
+    cyan: "bg-cyan-500", pink: "bg-pink-500", green: "bg-green-500",
+    indigo: "bg-indigo-500", red: "bg-red-500", emerald: "bg-emerald-500",
+    yellow: "bg-yellow-500", teal: "bg-teal-500", violet: "bg-violet-500",
+    gray: "bg-gray-500",
+  };
+  const barColor = COLOR_MAP[usage.color ?? "gray"] ?? "bg-blue-500";
+
+  const reqPct = usage.requests_limit > 0
+    ? Math.min(100, Math.round((usage.requests / usage.requests_limit) * 100)) : 0;
+  const tokPct = usage.tokens_limit > 0
+    ? Math.min(100, Math.round((totalTokens / usage.tokens_limit) * 100)) : 0;
+
   return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-xs text-gray-400">
-        <span>{usage.label}</span>
-        <span>
-          {usage.requests}
-          {usage.requests_limit ? ` / ${usage.requests_limit} req` : " req"}
-        </span>
+    <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-3 space-y-2">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-gray-200">{usage.label}</span>
+        {usage.requests_limit > 0 && (
+          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
+            reqPct >= 90 ? "border-red-800/50 bg-red-950/40 text-red-400"
+            : reqPct >= 70 ? "border-amber-800/50 bg-amber-950/40 text-amber-400"
+            : "border-gray-700 bg-gray-900 text-gray-400"
+          }`}>{reqPct}% used</span>
+        )}
       </div>
-      {usage.requests_limit > 0 ? (
-        <div className="h-1.5 overflow-hidden rounded-full bg-gray-800">
-          <div
-            className="h-full rounded-full bg-blue-500"
-            style={{ width: `${pct}%` }}
-          />
+
+      {/* Stat row */}
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <div>
+          <p className="text-base font-bold tabular-nums text-white">{fmtNum(usage.requests)}</p>
+          <p className="text-[10px] text-gray-600">
+            {usage.requests_limit > 0 ? `/ ${fmtNum(usage.requests_limit)} req` : "requests"}
+          </p>
         </div>
-      ) : null}
+        <div>
+          <p className="text-base font-bold tabular-nums text-blue-300">{fmtNum(usage.tokens_in ?? 0)}</p>
+          <p className="text-[10px] text-gray-600">tokens in</p>
+        </div>
+        <div>
+          <p className="text-base font-bold tabular-nums text-emerald-300">{fmtNum(usage.tokens_out ?? 0)}</p>
+          <p className="text-[10px] text-gray-600">tokens out</p>
+        </div>
+      </div>
+
+      {/* Request limit bar */}
+      {usage.requests_limit > 0 && (
+        <div>
+          <div className="flex justify-between text-[10px] text-gray-600 mb-0.5">
+            <span>Daily request limit</span><span>{reqPct}%</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-gray-800">
+            <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${reqPct}%` }} />
+          </div>
+        </div>
+      )}
+
+      {/* Token limit bar */}
+      {usage.tokens_limit > 0 && (
+        <div>
+          <div className="flex justify-between text-[10px] text-gray-600 mb-0.5">
+            <span>Daily token limit</span><span>{fmtNum(totalTokens)} / {fmtNum(usage.tokens_limit)}</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-gray-800">
+            <div className="h-full rounded-full bg-purple-500 transition-all" style={{ width: `${tokPct}%` }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -528,18 +586,58 @@ export default function AiConfigPage() {
         </div>
       </section>
 
-      {Object.keys(config.daily_usage ?? {}).length > 0 ? (
-        <section className="space-y-3">
-          <h2 className="text-lg font-medium">Today&apos;s usage</h2>
-          <div className="grid gap-3 rounded-xl border border-gray-800 p-4 md:grid-cols-2">
-            {Object.entries(config.daily_usage)
-              .filter(([, u]) => u.requests > 0 || u.requests_limit > 0)
-              .map(([key, usage]) => (
-                <UsageBar key={key} usage={usage} />
-              ))}
-          </div>
-        </section>
-      ) : null}
+      {(() => {
+        const usageEntries = Object.entries(config.daily_usage ?? {});
+        const activeEntries = usageEntries.filter(([, u]) => {
+          const total = (u.tokens_in ?? 0) + (u.tokens_out ?? 0);
+          return u.requests > 0 || total > 0;
+        });
+        const totalRequests = activeEntries.reduce((s, [, u]) => s + u.requests, 0);
+        const totalTokensIn  = activeEntries.reduce((s, [, u]) => s + (u.tokens_in ?? 0), 0);
+        const totalTokensOut = activeEntries.reduce((s, [, u]) => s + (u.tokens_out ?? 0), 0);
+        const showEntries = activeEntries.length > 0
+          ? activeEntries
+          : usageEntries.filter(([, u]) => u.requests_limit > 0 || u.tokens_limit > 0);
+
+        return (
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-medium">Today&apos;s usage</h2>
+              <span className="text-xs text-gray-500">resets at midnight UTC</span>
+            </div>
+
+            {/* Summary banner — only when there is activity */}
+            {activeEntries.length > 0 && (
+              <div className="grid grid-cols-3 gap-3 rounded-xl border border-gray-800 bg-gray-900/40 p-4">
+                <div className="text-center">
+                  <p className="text-2xl font-bold tabular-nums text-white">{fmtNum(totalRequests)}</p>
+                  <p className="text-xs text-gray-500">total requests today</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold tabular-nums text-blue-300">{fmtNum(totalTokensIn)}</p>
+                  <p className="text-xs text-gray-500">total tokens in</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold tabular-nums text-emerald-300">{fmtNum(totalTokensOut)}</p>
+                  <p className="text-xs text-gray-500">total tokens out</p>
+                </div>
+              </div>
+            )}
+
+            {showEntries.length > 0 ? (
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                {showEntries.map(([key, usage]) => (
+                  <UsageBar key={key} usage={usage} />
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-xl border border-dashed border-gray-800 px-6 py-8 text-center text-sm text-gray-600">
+                No AI requests made today yet — usage will appear here once the first AI call is made.
+              </p>
+            )}
+          </section>
+        );
+      })()}
 
       <section className="space-y-4">
         <h2 className="text-lg font-medium">Provider API keys</h2>

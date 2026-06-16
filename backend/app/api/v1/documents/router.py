@@ -14,6 +14,7 @@ from app.models.srs import SRS
 from app.models.project import Project
 from app.models.requirement import Requirement
 from app.models.user import User
+from app.services.prd.source import get_prd_export_content
 from app.services.pdf.service import (
     build_clarification_html,
     build_prd_html,
@@ -105,13 +106,19 @@ async def export_prd_pdf_sync(
     project = project_result.scalar_one_or_none()
     project_name = project.name if project else "Unknown project"
 
-    html = build_prd_html(prd.content_json, project_name, prd.version)
+    export_content = get_prd_export_content(prd)
+    if not export_content:
+        raise HTTPException(status_code=404, detail="PRD content not found")
+    meta = export_content.get("_meta") or {}
+    export_version = int(meta.get("finalized_version") or prd.version)
+
+    html = build_prd_html(export_content, project_name, export_version)
     pdf_bytes = render_html_to_pdf(html)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f'attachment; filename="prd-{prd_id}-v{prd.version}.pdf"'
+            "Content-Disposition": f'attachment; filename="prd-{prd_id}-v{export_version}.pdf"'
         },
     )
 

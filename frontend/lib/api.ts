@@ -3,6 +3,47 @@ const DEFAULT_BASE_URL =
 const ACCESS_TOKEN_KEY = "access_token";
 const REFRESH_TOKEN_KEY = "refresh_token";
 
+export interface PermissionCell {
+  role: string;
+  screen_key: string;
+  can_view: boolean;
+  can_edit: boolean;
+}
+
+export interface PermissionMatrix {
+  roles: string[];
+  admin_roles: string[];
+  screens: string[];
+  permissions: PermissionCell[];
+}
+
+export interface DashboardStats {
+  generated_at: string;
+  projects: { total: number; by_status: Record<string, number> };
+  clients: { total: number };
+  users: { total: number; by_role: Record<string, number> };
+  pipeline: Record<string, number>;
+  tasks: {
+    total: number;
+    by_status: Record<string, number>;
+    specs_ready: number;
+    specs_total: number;
+  };
+  ai: {
+    total_requests_today: number;
+    total_tokens_in: number;
+    total_tokens_out: number;
+    total_tokens: number;
+    by_provider: Record<string, {
+      label: string; tier: string; color: string;
+      requests: number; requests_limit: number;
+      tokens_in: number; tokens_out: number;
+      tokens_total: number; tokens_limit: number;
+    }>;
+  };
+  recent_projects: Array<{ id: string; name: string; status: string; updated_at: string | null }>;
+}
+
 export interface UserRegister {
   email: string;
   full_name: string;
@@ -86,11 +127,13 @@ export interface Requirement {
   id: string;
   project_id: string;
   original_filename: string;
+  display_name?: string;
   status: string;
   analysis_result?: Record<string, unknown> | null;
   cost_estimate?: Record<string, unknown> | null;
   error_message?: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface PRD {
@@ -153,6 +196,9 @@ export interface Architecture {
     overall?: number;
     issues?: string[];
     fr_coverage?: string;
+    endpoint_count?: number;
+    missing_frs?: string[];
+    edited_docs?: string[];
   } | null;
 }
 
@@ -481,6 +527,26 @@ export class ApiClient {
     }
   }
 
+  async getPermissionMatrix(): Promise<PermissionMatrix> {
+    return this.request<PermissionMatrix>("/admin/screen-permissions");
+  }
+
+  async updatePermission(
+    role: string,
+    screen_key: string,
+    can_view: boolean,
+    can_edit: boolean,
+  ): Promise<PermissionCell> {
+    return this.request<PermissionCell>(`/admin/screen-permissions/${role}/${screen_key}`, {
+      method: "PATCH",
+      body: JSON.stringify({ can_view, can_edit }),
+    });
+  }
+
+  async getDashboardStats(): Promise<DashboardStats> {
+    return this.request<DashboardStats>("/dashboard/stats");
+  }
+
   async me(): Promise<UserResponse> {
     const user = await this.request<UserResponse>("/auth/me");
     this.sessionActive = true;
@@ -495,6 +561,14 @@ export class ApiClient {
     return this.request(`/jobs/${taskId}`);
   }
 
+  async getSyncProgress(progressId: string): Promise<{
+    progress_id: string;
+    status: string;
+    meta: TaskStatus["meta"];
+  }> {
+    return this.request(`/jobs/progress/${progressId}`);
+  }
+
   // AI model catalog + per-action override
   async listAiModels(): Promise<AiModelCatalog> {
     return this.request("/ai/models");
@@ -505,6 +579,21 @@ export class ApiClient {
     if (!model?.provider || !model?.model) return "";
     const sep = hasQuery ? "&" : "?";
     return `${sep}model_provider=${encodeURIComponent(model.provider)}&model_id=${encodeURIComponent(model.model)}`;
+  }
+
+  /** Query string for sync AI actions with optional live progress polling. */
+  private aiActionQS(options?: {
+    model?: ModelChoice | null;
+    progressId?: string;
+  }): string {
+    const params = new URLSearchParams();
+    if (options?.progressId) params.set("progress_id", options.progressId);
+    if (options?.model?.provider && options?.model?.model) {
+      params.set("model_provider", options.model.provider);
+      params.set("model_id", options.model.model);
+    }
+    const qs = params.toString();
+    return qs ? `?${qs}` : "";
   }
 
   subscribeTask(
@@ -590,9 +679,13 @@ export class ApiClient {
       body: form,
     });
   }
-  async synthesizeRequirement(id: string, model?: ModelChoice | null) {
+  async synthesizeRequirement(
+    id: string,
+    model?: ModelChoice | null,
+    progressId?: string,
+  ) {
     return this.request<Record<string, unknown>>(
-      `/requirements/${id}/synthesize${this.modelQS(model)}`,
+      `/requirements/${id}/synthesize${this.aiActionQS({ model, progressId })}`,
       { method: "POST" },
     );
   }
@@ -600,14 +693,21 @@ export class ApiClient {
     id: string,
     instructions: string,
     model?: ModelChoice | null,
+    progressId?: string,
   ) {
     return this.request<Record<string, unknown>>(
-      `/requirements/${id}/reanalyze${this.modelQS(model)}`,
+      `/requirements/${id}/reanalyze${this.aiActionQS({ model, progressId })}`,
       {
         method: "POST",
         body: JSON.stringify({ instructions }),
       },
     );
+  }
+  async finalizeRequirement(id: string): Promise<Requirement> {
+    return this.request<Requirement>(`/requirements/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status: "finalized" }),
+    });
   }
   getClarificationPdfUrl(id: string): string {
     return `${this.baseUrl}/documents/requirements/${id}/clarification-pdf`;
@@ -767,6 +867,23 @@ export class ApiClient {
       status: string;
     }>(`/architecture/${id}/resume${this.modelQS(model)}`, { method: "POST" });
   }
+  async reassessArchitecture(id: string, model?: ModelChoice | null) {
+    return this.request<{
+      architecture_id: string;
+      task_id: string;
+      status: string;
+    }>(`/architecture/${id}/reassess${this.modelQS(model)}`, { method: "POST" });
+  }
+  async editArchitectureSuite(id: string, instruction: string, model?: ModelChoice | null) {
+    return this.request<{
+      architecture_id: string;
+      task_id: string;
+      status: string;
+    }>(`/architecture/${id}/edit-suite${this.modelQS(model)}`, {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    });
+  }
   async generateArchitectureDoc(id: string, docKey: string, model?: ModelChoice | null) {
     return this.request<{
       architecture_id: string;
@@ -848,14 +965,39 @@ export class ApiClient {
       body: JSON.stringify(body),
     });
   }
-  async extractModules(projectId: string, srsId: string) {
+  async extractModules(
+    projectId: string,
+    srsId: string,
+    opts?: { replaceExisting?: boolean; fillGapsOnly?: boolean },
+  ) {
     return this.request<{ task_id: string; status: string }>("/tasks/extract-modules", {
       method: "POST",
-      body: JSON.stringify({ project_id: projectId, srs_id: srsId }),
+      body: JSON.stringify({
+        project_id:       projectId,
+        srs_id:           srsId,
+        replace_existing: opts?.replaceExisting ?? false,
+        fill_gaps_only:   opts?.fillGapsOnly   ?? false,
+      }),
     });
   }
   async getProjectBible(projectId: string): Promise<{ content: string; project_name: string }> {
     return this.request(`/tasks/project-bible/${projectId}`);
+  }
+  async getTraceability(projectId: string): Promise<any> {
+    return this.request(`/tasks/traceability/${projectId}`);
+  }
+  async getTaskCoverage(projectId: string): Promise<{
+    total_frs: number;
+    covered_frs: number;
+    missing_frs: string[];
+    total_tasks: number;
+    tasks_with_spec: number;
+    tasks_done: number;
+    has_tasks: boolean;
+    all_done: boolean;
+    coverage_pct: number;
+  }> {
+    return this.request(`/tasks/coverage/${projectId}`);
   }
 
   // Specs

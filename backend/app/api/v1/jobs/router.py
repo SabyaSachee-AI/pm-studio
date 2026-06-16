@@ -8,8 +8,20 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
 from app.core.celery_app import celery_app
+from app.services.ai.job_progress import read_sync_progress
 
 router = APIRouter(prefix="/jobs", tags=["Background Jobs"])
+
+
+@router.get("/progress/{progress_id}")
+async def get_sync_job_progress(progress_id: str) -> dict:
+    """Poll live model/progress meta for synchronous API AI calls (e.g. feedback synthesis)."""
+    meta = await read_sync_progress(progress_id)
+    return {
+        "progress_id": progress_id,
+        "status": "PROGRESS" if meta else "PENDING",
+        "meta": meta or {},
+    }
 
 
 @router.get("/{task_id}")

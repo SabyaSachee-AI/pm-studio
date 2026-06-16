@@ -11,6 +11,7 @@ from app.models.project import Project
 from app.models.srs import SRS, SRSStatus
 from app.services.ai.model_override import clear_model_override, set_model_override
 from app.services.ai.srs_service import enrich_srs_content
+from app.services.prd.source import resolve_prd_for_downstream
 from app.services.srs.service import generate_srs_ai
 
 logger = logging.getLogger(__name__)
@@ -39,12 +40,25 @@ def generate_srs_task(
             db.commit()
             return {"error": "PRD has no content"}
 
+        prd_content, prd_source = resolve_prd_for_downstream(prd)
+        if not prd_content:
+            srs.status = SRSStatus.rejected
+            db.commit()
+            return {"error": "PRD has no finalized content for SRS generation"}
+
+        logger.info(
+            "SRS generation PRD source for prd %s: %s v%s",
+            prd.id,
+            prd_source.get("type"),
+            prd_source.get("version"),
+        )
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             srs_data = loop.run_until_complete(
                 generate_srs_ai(
-                    prd_content=prd.content_json,
+                    prd_content=prd_content,
                     project_name=project.name if project else "Unknown Project",
                 )
             )

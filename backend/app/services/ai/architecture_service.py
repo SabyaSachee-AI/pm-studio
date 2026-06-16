@@ -41,6 +41,8 @@ from app.services.ai.architecture_consistency import (
 )
 from app.services.ai.base import ai_call
 from app.services.ai.mermaid_sanitize import sanitize_doc_diagrams
+from app.services.prd.source import resolve_prd_for_downstream
+from app.services.requirement.source import get_finalized_draft, is_requirement_finalized
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,60 @@ def _srs_summary(srs_content: dict[str, Any]) -> str:
     )
 
 
+def _requirements_brief(requirements: list[Any]) -> str:
+    """Compact JSON summary of finalized requirements for architecture context."""
+    rows: list[dict[str, Any]] = []
+    for req in requirements:
+        analysis = req.analysis_result or {}
+        if not is_requirement_finalized(analysis):
+            continue
+        draft = get_finalized_draft(analysis)
+        if not draft:
+            continue
+        rows.append(
+            {
+                "file": req.original_filename,
+                "project_overview": (draft.get("project_overview") or "")[:500],
+                "confirmed_features": (draft.get("confirmed_features") or [])[:20],
+                "technical_decisions": (draft.get("technical_decisions") or [])[:20],
+                "out_of_scope": (draft.get("out_of_scope") or [])[:10],
+                "users_and_roles": (draft.get("users_and_roles") or "")[:300],
+            }
+        )
+    if not rows:
+        return ""
+    return json.dumps(rows, separators=(",", ":"), default=str)
+
+
+def _prd_brief_block(prd_content: dict[str, Any] | None) -> str:
+    """Compact PRD context block appended to architecture prompts."""
+    if not prd_content:
+        return ""
+    prd_brief = {
+        "executive_summary": (prd_content.get("executive_summary") or "")[:1000],
+        "features": [
+            {
+                "title": f.get("title", ""),
+                "description": (f.get("description") or "")[:300],
+                "priority": f.get("priority", ""),
+            }
+            for f in (prd_content.get("features") or [])
+        ],
+        "out_of_scope": prd_content.get("out_of_scope") or [],
+        "success_metrics": prd_content.get("success_metrics") or [],
+    }
+    return f"\n\nPRD CONTEXT:\n{json.dumps(prd_brief, separators=(',', ':'), default=str)}"
+
+
+MERMAID_RULES = """
+MERMAID DIAGRAM RULES — follow exactly or the diagram will fail to render:
+- flowchart: start with "flowchart TD" or "flowchart LR". Node IDs must be alphanumeric (A, API, DB1). Labels with spaces/colons must use quotes: A["Label with spaces"]. Arrows: A --> B or A --> B["label"]. subgraph must end with "end".
+- erDiagram: start with "erDiagram" (no direction keyword). Entity names UPPERCASE. Relations: ENTITY1 ||--o{ ENTITY2 : "label". Attributes on next lines after entity name block.
+- sequenceDiagram: participant aliases must be quoted if they contain spaces: participant A as "API Server". Arrows: A ->> B: message. Never use "->", always "->>".
+- NEVER use: classDef, class, style, linkStyle, %% comments, note left/right (sequence-only). Do NOT wrap in ```mermaid blocks.
+"""
+
+
 def _doc_prompt(
     doc_field: str,
     srs_summary: str,
@@ -94,7 +150,8 @@ SRS context:
 
 Include: overview, architecture_pattern, tech_stack (Next.js 14, FastAPI, PostgreSQL, Redis, Celery),
 components with ports, data_flow steps, infrastructure, and Mermaid flowcharts in diagrams
-(system_overview, deployment). Use valid Mermaid syntax.
+(system_overview, deployment).
+{MERMAID_RULES}
 """,
         "doc_database": f"""
 Generate the Database Design document for {project_name}.
@@ -104,6 +161,7 @@ SRS context:
 
 Include: overview, PostgreSQL conventions, tables linked to SRS data entities with columns/indexes,
 relationships, migration_order, and Mermaid erDiagram in diagrams.erd.
+{MERMAID_RULES}
 """,
         "doc_api": f"""
 Generate the API Specification for {project_name}.
@@ -114,6 +172,7 @@ SRS context:
 Include: REST endpoints at /api/v1 linked to SRS FR ids, auth (JWT HttpOnly cookies),
 request/response bodies, error codes, file paths, and Mermaid sequence diagrams
 (auth_flow, request_flow).
+{MERMAID_RULES}
 """,
         "doc_frontend": f"""
 Generate the Frontend Architecture for {project_name}.
@@ -123,6 +182,7 @@ SRS context:
 
 Include: Next.js 14 App Router pages, components, api_calls, folder_structure,
 and Mermaid diagrams (component_tree, routing).
+{MERMAID_RULES}
 """,
         "doc_security": f"""
 Generate the Security + RBAC plan for {project_name}.
@@ -132,6 +192,7 @@ SRS context:
 
 Include: JWT auth mechanism, RBAC roles/permission_matrix, api_security controls,
 OWASP checklist, and Mermaid diagrams (auth_flow, rbac_flow).
+{MERMAID_RULES}
 """,
         "doc_uiux": f"""
 Generate UI/UX Design Guidance for {project_name}.
@@ -141,6 +202,7 @@ SRS context:
 
 Include: design_system (colors, typography), page sections/components, ux_rules,
 and Mermaid diagrams (user_flow, page_layout).
+{MERMAID_RULES}
 """,
     }
     return prompts.get(doc_field, f"Generate architecture document {doc_field}.")
@@ -157,6 +219,7 @@ async def generate_single_document(
     cross_doc_context: str = "",
     instructions: str = "",
     existing_doc: dict[str, Any] | None = None,
+    requirements_context: str = "",
 ) -> dict[str, Any]:
     """Generate one architecture document via AI."""
     schema = next(s for f, _, s in DOCUMENT_ORDER if f == doc_field)
@@ -171,22 +234,9 @@ async def generate_single_document(
         prompt += f"\n\n{format_canon_prompt_block(suite_canon)}"
     if cross_doc_context:
         prompt += f"\n\nPRIOR DOCUMENTS:\n{cross_doc_context}"
-    if prd_content:
-        # Selective extraction — all features by title+priority, no char barrier.
-        prd_brief = {
-            "executive_summary": (prd_content.get("executive_summary") or "")[:600],
-            "features": [
-                {
-                    "title": f.get("title", ""),
-                    "description": (f.get("description") or "")[:120],
-                    "priority": f.get("priority", ""),
-                }
-                for f in (prd_content.get("features") or [])
-            ],
-            "out_of_scope": prd_content.get("out_of_scope") or [],
-            "success_metrics": prd_content.get("success_metrics") or [],
-        }
-        prompt += f"\n\nPRD CONTEXT:\n{json.dumps(prd_brief, separators=(',', ':'), default=str)}"
+    prompt += _prd_brief_block(prd_content)
+    if requirements_context:
+        prompt += f"\n\nORIGINAL REQUIREMENTS (source of truth — features/decisions confirmed by client):\n{requirements_context}"
     if existing_doc:
         prompt += f"\n\nEXISTING DOCUMENT (revise):\n{json.dumps(existing_doc)[:8000]}"
     if instructions.strip():
@@ -230,6 +280,7 @@ async def generate_single_doc_with_instructions(
     suite_canon: dict[str, Any] | None = None,
     cross_doc_context: str = "",
     task_type: str = "arch_generate",
+    requirements_context: str = "",
 ) -> dict[str, Any]:
     return await generate_single_document(
         doc_field,
@@ -241,6 +292,7 @@ async def generate_single_doc_with_instructions(
         cross_doc_context=cross_doc_context,
         instructions=instructions,
         existing_doc=existing_doc,
+        requirements_context=requirements_context,
     )
 
 
@@ -250,9 +302,11 @@ async def generate_api_document_chunked(
     srs_content: dict[str, Any],
     project_info: dict[str, Any],
     *,
+    prd_content: dict[str, Any] | None = None,
     suite_canon: dict[str, Any] | None = None,
     cross_doc_context: str = "",
     task_type: str = "arch_generate",
+    requirements_context: str = "",
 ) -> dict[str, Any]:
     """Generate API doc in chunks — shell first, then endpoint groups by FR batch."""
     srs_summary = _srs_summary(srs_content)
@@ -307,6 +361,9 @@ async def generate_api_document_chunked(
         base_prompt += f"\n\n{format_canon_prompt_block(suite_canon)}"
     if cross_doc_context:
         base_prompt += f"\n\nPRIOR DOCUMENTS:\n{cross_doc_context}"
+    base_prompt += _prd_brief_block(prd_content)
+    if requirements_context:
+        base_prompt += f"\n\nORIGINAL REQUIREMENTS (source of truth):\n{requirements_context}"
 
     system = (
         "You are a senior software architect. Return strictly structured JSON. "
@@ -445,12 +502,26 @@ async def run_single_architecture_doc(
         return {"error": "SRS has no content", "doc_key": doc_field}
 
     prd = db.query(PRD).filter(PRD.id == srs.prd_id).first() if srs.prd_id else None
-    prd_content = prd.content_json if prd and prd.content_json else None
+    prd_content = None
+    if prd and prd.content_json:
+        prd_content, _ = resolve_prd_for_downstream(prd)
     project_info = {
         "name": project.name if project else "Unknown Project",
         "type": "Web App",
         "description": project.description if project else "",
     }
+
+    from app.models.requirement import Requirement  # noqa: PLC0415
+    reqs = (
+        db.query(Requirement)
+        .filter(
+            Requirement.project_id == arch.project_id,
+            Requirement.deleted_at.is_(None),
+        )
+        .all()
+    )
+    requirements_context = _requirements_brief(reqs)
+
     suite_canon = getattr(arch, "suite_canon", None) or build_suite_canon_from_srs(
         srs.content_json,
         project_info["name"],
@@ -505,6 +576,7 @@ async def run_single_architecture_doc(
                 prd_content=prd_content,
                 suite_canon=suite_canon,
                 cross_doc_context=cross_doc_context,
+                requirements_context=requirements_context,
             )
         elif doc_field == "doc_api":
             result = await generate_api_document_chunked(
@@ -512,9 +584,11 @@ async def run_single_architecture_doc(
                 db,
                 srs.content_json,
                 project_info,
+                prd_content=prd_content,
                 suite_canon=suite_canon,
                 cross_doc_context=cross_doc_context,
                 task_type=task_type,
+                requirements_context=requirements_context,
             )
         else:
             result = await generate_single_document(
@@ -525,6 +599,7 @@ async def run_single_architecture_doc(
                 task_type=task_type,
                 suite_canon=suite_canon,
                 cross_doc_context=cross_doc_context,
+                requirements_context=requirements_context,
             )
 
         arch = db.query(Architecture).filter(Architecture.id == architecture_id).first()
@@ -543,6 +618,7 @@ async def run_single_architecture_doc(
         arch.suite_canon = suite_canon
         arch.generation_progress = None
         arch.last_error = None
+        arch.generation_task_id = None
         task_ids = dict(arch.doc_task_ids or {})
         task_ids.pop(doc_field, None)
         arch.doc_task_ids = task_ids
@@ -552,6 +628,9 @@ async def run_single_architecture_doc(
         if arch and all(
             getattr(arch, f"{f}_status") in COMPLETED_STATUSES for f, _, _ in DOCUMENT_ORDER
         ):
+            arch.can_resume = False
+            arch.resume_from = None
+            db.commit()
             await consolidate_architecture_suite(architecture_id, db)
 
         return {"status": "completed", "doc_key": doc_field}
@@ -592,6 +671,8 @@ async def generate_full_architecture(
     project_info: dict[str, Any],
     db: Session,
     resume: bool = False,
+    prd_content: dict[str, Any] | None = None,
+    requirements_context: str = "",
 ) -> dict[str, str]:
     """Generate documents one at a time, saving after each."""
     arch = db.query(Architecture).filter(Architecture.id == architecture_id).first()
@@ -620,7 +701,10 @@ async def generate_full_architecture(
         await update_job_status(architecture_id, "processing", message=status_msg)
 
         try:
-            result = await generate_single_document(doc_field, srs_content, project_info)
+            result = await generate_single_document(
+                doc_field, srs_content, project_info, prd_content,
+                requirements_context=requirements_context,
+            )
             setattr(arch, doc_field, result)
             setattr(arch, status_field, "completed")
             arch.resume_from = None
@@ -645,7 +729,10 @@ async def generate_full_architecture(
             await asyncio.sleep(wait_seconds)
 
             try:
-                result = await generate_single_document(doc_field, srs_content, project_info)
+                result = await generate_single_document(
+                    doc_field, srs_content, project_info, prd_content,
+                    requirements_context=requirements_context,
+                )
                 setattr(arch, doc_field, result)
                 setattr(arch, status_field, "completed")
                 arch.can_resume = False
@@ -938,6 +1025,42 @@ async def edit_architecture_doc_ai(
     dumped = result.model_dump()
     sanitized = sanitize_doc_diagrams(dumped)
     return sanitized if sanitized is not None else dumped
+
+
+async def edit_architecture_suite_ai(
+    architecture_id: UUID,
+    instruction: str,
+    db: Session,
+) -> dict[str, Any]:
+    """Apply one free-text PM instruction across all 6 architecture documents.
+
+    Each generated doc is edited via ai_call(), persisted, then the whole suite is
+    re-aligned to canon and re-scored so the consistency report stays accurate.
+    """
+    arch = db.query(Architecture).filter(Architecture.id == architecture_id).first()
+    if not arch:
+        return {"error": "Architecture not found"}
+
+    edited_keys: list[str] = []
+    for doc_key in DOC_FIELDS:
+        content = getattr(arch, doc_key, None)
+        if not content:
+            continue
+        try:
+            corrected = await edit_architecture_doc_ai(doc_key, content, instruction)
+        except Exception:  # noqa: BLE001 — one doc failing must not abort the suite
+            logger.exception("Suite edit failed for %s", doc_key)
+            continue
+        setattr(arch, doc_key, corrected)
+        edited_keys.append(doc_key)
+
+    db.commit()
+    db.refresh(arch)
+
+    # Re-align + re-score so the consistency report reflects the edits
+    report = await consolidate_architecture_suite(architecture_id, db, ai_repair=False)
+    report["edited_docs"] = edited_keys
+    return report
 
 
 PDF_POLISH_SYSTEM = (
