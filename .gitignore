@@ -28,6 +28,10 @@ backend/test_req.pdf
 # Logs
 backend/_arch_monitor_log.txt
 *.log
+logs/
+
+# Dev scratch — code/notes extracted from transcripts (not for the repo)
+_extracted_from_transcript/
 
 # OS
 .DS_Store
