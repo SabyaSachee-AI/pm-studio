@@ -14,7 +14,7 @@ Use Docker for **PostgreSQL** and **Redis**, and run the app on your machine for
 |------|---------|---------|
 | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | Latest | Database and Redis |
 | Python | 3.12+ | Backend API and Celery |
-| Node.js | 18+ | Frontend dev server |
+| Node.js | 20+ | Frontend dev server |
 
 ### First-time setup (once per machine)
 
@@ -29,7 +29,7 @@ Use Docker for **PostgreSQL** and **Redis**, and run the app on your machine for
    Edit `.env` and set at minimum:
 
    - `JWT_SECRET` — any random string, at least 32 characters
-   - `ANTHROPIC_API_KEY` — required for AI generation features
+   - At least one AI provider key (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, etc.) — see `.env.example`
 
 3. **Install backend dependencies:**
 
@@ -96,11 +96,9 @@ npm run dev
 When all four terminals are running:
 
 1. Open your browser and go to **[http://localhost:3000](http://localhost:3000)**
-2. Sign in with:
-   - **Email:** `owner@pmstudio.com`
-   - **Password:** `password123`
+2. **Register** the first user at the login screen (fresh databases have no seed account).
 
-   If this account does not exist yet (fresh database), register a new user at the login screen or via `POST /api/v1/auth/register`.
+   If you migrated an existing database dump, use your previous credentials.
 
 **Other useful URLs**
 
@@ -189,12 +187,13 @@ To run backend, Celery, and frontend inside Docker as well:
 ## Stack
 
 - **Backend:** FastAPI, SQLAlchemy 2, Pydantic v2, Celery, Alembic
-- **Frontend:** Next.js 14 App Router, TypeScript, Tailwind, shadcn/ui
+- **Frontend:** Next.js 16 App Router, TypeScript, Tailwind, shadcn/ui
 - **Data:** PostgreSQL 16, Redis 7
 - **AI:** Anthropic Claude (structured output via Instructor)
 
 ## Project docs
 
+- [DEPLOY.md](./DEPLOY.md) — fresh clone, VPS deploy, database migration, production env
 - [PROJECT_STATUS.md](./PROJECT_STATUS.md) — feature status, API map, E2E verification
 - [.cursorrules](./.cursorrules) — development standards for contributors
 
