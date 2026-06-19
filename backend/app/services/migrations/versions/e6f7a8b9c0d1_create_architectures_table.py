@@ -6,6 +6,8 @@ Create Date: 2026-06-06 14:00:00.000000
 
 """
 from typing import Sequence, Union
+import uuid
+from datetime import datetime, timezone
 
 import sqlalchemy as sa
 from alembic import op
@@ -58,15 +60,16 @@ def upgrade() -> None:
 
     screen_permissions = sa.table(
         "screen_permissions",
+        sa.column("id", sa.UUID),
         sa.column("role", sa.String),
         sa.column("screen_key", sa.String),
         sa.column("can_view", sa.Boolean),
         sa.column("can_edit", sa.Boolean),
-        sa.column("id", sa.UUID),
         sa.column("created_at", sa.DateTime(timezone=True)),
         sa.column("updated_at", sa.DateTime(timezone=True)),
         sa.column("deleted_at", sa.DateTime(timezone=True)),
     )
+    now = datetime.now(timezone.utc)
     rows = []
     for role, view, edit in [
         ("studio_owner", True, True),
@@ -76,10 +79,14 @@ def upgrade() -> None:
     ]:
         rows.append(
             {
+                "id": uuid.uuid4(),
                 "role": role,
                 "screen_key": "architecture",
                 "can_view": view,
                 "can_edit": edit,
+                "created_at": now,
+                "updated_at": now,
+                "deleted_at": None,
             }
         )
     op.execute(
