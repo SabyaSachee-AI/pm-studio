@@ -10,6 +10,8 @@ backend/venv/
 
 # Environment secrets
 .env
+.env.*
+!.env.example
 *.env
 
 # Next.js

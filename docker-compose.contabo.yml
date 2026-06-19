@@ -1,0 +1,77 @@
+# PM Studio — Contabo VPS (isolated host ports, nginx on 8090)
+# Usage: docker compose -f docker-compose.contabo.yml up -d --build
+# Or run: bash scripts/setup-contabo.sh
+
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: pmstudio
+      POSTGRES_USER: pmstudio
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-prod_secure_password_123}
+    ports:
+      - "5435:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pmstudio"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    ports:
+      - "127.0.0.1:8005:8000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/uploads:/app/uploads
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    command: celery -A app.core.celery_app worker --loglevel=info --pool=solo
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/uploads:/app/uploads
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "127.0.0.1:3010:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://185.185.80.147:8090/api/v1}
+    depends_on:
+      - backend
+
+volumes:
+  pg_data:
