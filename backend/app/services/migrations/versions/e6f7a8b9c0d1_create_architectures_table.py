@@ -71,7 +71,7 @@ def upgrade() -> None:
     for role, view, edit in [
         ("studio_owner", True, True),
         ("architect", True, True),
-        ("developer", True, False),
+        ("code_creator", True, False),
         ("client", False, False),
     ]:
         rows.append(
