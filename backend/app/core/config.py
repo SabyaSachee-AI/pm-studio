@@ -2,10 +2,10 @@
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Self
+from typing import Annotated, Self
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # backend/app/core/config.py -> project root is three levels up
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -115,9 +115,9 @@ class Settings(BaseSettings):
         default="development",
         description="Runtime environment name (e.g. development, staging, production).",
     )
-    allowed_origins: list[str] = Field(
+    allowed_origins: Annotated[list[str], NoDecode] = Field(
         default=["http://localhost:3000"],
-        description="CORS allowed origins.",
+        description="CORS allowed origins (comma-separated in .env).",
     )
     r2_account_id: str | None = Field(
         default=None,
