@@ -82,6 +82,9 @@ def upgrade() -> None:
                 "can_edit": edit,
             }
         )
+    op.execute(
+        "DELETE FROM screen_permissions WHERE screen_key = 'architecture'"
+    )
     op.bulk_insert(screen_permissions, rows)
 
 
