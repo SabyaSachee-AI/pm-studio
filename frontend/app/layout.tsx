@@ -14,6 +14,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark h-full">
+      <head>
+        {/* Tabler icon webfont — powers all `ti ti-*` icons across the app */}
+        <link
+          rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3/dist/tabler-icons.min.css"
+        />
+      </head>
       <body className="min-h-full flex flex-col bg-gray-950 font-sans antialiased">
         {children}
       </body>
