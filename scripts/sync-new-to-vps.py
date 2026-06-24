@@ -37,7 +37,7 @@ from typing import Any
 try:
     import psycopg2
     from psycopg2 import sql
-    from psycopg2.extras import execute_values
+    from psycopg2.extras import Json, execute_values
 except ImportError:
     print("ERROR: psycopg2 not installed. Run: pip install psycopg2-binary", file=sys.stderr)
     sys.exit(1)
@@ -165,6 +165,39 @@ def fetch_local_rows(
         return cur.fetchall()
 
 
+def get_json_columns(conn, table: str) -> set[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s
+              AND udt_name IN ('json', 'jsonb')
+            """,
+            (table,),
+        )
+        return {row[0] for row in cur.fetchall()}
+
+
+def adapt_rows_for_insert(
+    columns: list[str],
+    rows: list[tuple[Any, ...]],
+    json_columns: set[str],
+) -> list[tuple[Any, ...]]:
+    if not json_columns:
+        return rows
+    json_indices = [columns.index(name) for name in columns if name in json_columns]
+    adapted: list[tuple[Any, ...]] = []
+    for row in rows:
+        values = list(row)
+        for idx in json_indices:
+            value = values[idx]
+            if value is not None and isinstance(value, (dict, list)):
+                values[idx] = Json(value)
+        adapted.append(tuple(values))
+    return adapted
+
+
 def insert_rows(
     conn,
     table: str,
@@ -177,13 +210,16 @@ def insert_rows(
     if dry_run:
         return len(rows)
 
+    json_columns = get_json_columns(conn, table)
+    payload = adapt_rows_for_insert(columns, rows, json_columns)
+
     col_sql = sql.SQL(", ").join(sql.Identifier(c) for c in columns)
     insert_sql = sql.SQL("INSERT INTO {} ({}) VALUES %s ON CONFLICT (id) DO NOTHING").format(
         sql.Identifier(table),
         col_sql,
     )
     with conn.cursor() as cur:
-        execute_values(cur, insert_sql.as_string(conn), rows, page_size=200)
+        execute_values(cur, insert_sql.as_string(conn), payload, page_size=200)
     conn.commit()
     return len(rows)
 
