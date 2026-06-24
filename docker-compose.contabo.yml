@@ -2,8 +2,6 @@
 # Usage: docker compose -f docker-compose.contabo.yml up -d --build
 # Or run: bash scripts/setup-contabo.sh
 
-version: '3.9'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -51,7 +49,24 @@ services:
     build:
       context: .
       dockerfile: docker/backend.Dockerfile
-    command: celery -A app.core.celery_app worker --loglevel=info --pool=solo
+    # Default queue: PRD/SRS/architecture/spec/etc.
+    command: celery -A app.core.celery_app worker --loglevel=info --pool=solo -Q celery
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/uploads:/app/uploads
+
+  celery-build-worker:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    # Dedicated queue for long code-build jobs so they never block other AI jobs.
+    command: celery -A app.core.celery_app worker --loglevel=info --pool=solo -Q build -n build@%h
     env_file:
       - .env
     depends_on:
