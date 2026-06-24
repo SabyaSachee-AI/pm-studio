@@ -1,0 +1,21 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="pm-bg" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366F1"/>
+      <stop offset="0.55" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+    <linearGradient id="pm-gloss" x1="16" y1="2" x2="16" y2="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- Squircle badge -->
+  <rect x="1.5" y="1.5" width="29" height="29" rx="8.5" fill="url(#pm-bg)"/>
+  <rect x="1.5" y="1.5" width="29" height="29" rx="8.5" fill="url(#pm-gloss)"/>
+  <rect x="1.5" y="1.5" width="29" height="29" rx="8.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.18"/>
+  <!-- Main AI spark (4-point star) -->
+  <path d="M16 6 Q17.3 14.7 26 16 Q17.3 17.3 16 26 Q14.7 17.3 6 16 Q14.7 14.7 16 6 Z" fill="#FFFFFF"/>
+  <!-- Small accent spark -->
+  <path d="M23.6 6.2 Q24.1 8.3 26.2 8.8 Q24.1 9.3 23.6 11.4 Q23.1 9.3 21 8.8 Q23.1 8.3 23.6 6.2 Z" fill="#FFFFFF" fill-opacity="0.9"/>
+</svg>
