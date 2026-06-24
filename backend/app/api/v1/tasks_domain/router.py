@@ -30,6 +30,7 @@ from app.workers.orchestration_tasks import generate_orchestration_task
 from app.services.task.bible_builder import build_project_bible
 from app.services.task.coverage import (
     compute_coverage,
+    compute_full_coverage,
     covered_fr_ids,
     extract_fr_ids,
     normalize_fr_id,
@@ -568,6 +569,8 @@ async def get_project_traceability(
     # traceability matrix, the /coverage endpoint, and the gap-fill worker
     # always agree on which FRs are missing.
     coverage = compute_coverage(srs.content_json if srs else None, tasks)
+    # Multi-dimensional completeness: FR + API endpoints + DB tables + NFRs.
+    full_coverage = compute_full_coverage(srs.content_json if srs else None, arch, tasks)
 
     return {
         "project_id":   str(project_id),
@@ -578,4 +581,5 @@ async def get_project_traceability(
         "architecture": architecture_data,
         "tasks":        tasks_data,
         "coverage":     coverage,
+        "full_coverage": full_coverage,
     }

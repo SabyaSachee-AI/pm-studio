@@ -1,4 +1,12 @@
 from app.models.architecture import Architecture, ArchitectureStatus
+from app.models.build import (
+    Build,
+    BuildStage,
+    BuildStageRun,
+    BuildStatus,
+    FileStatus,
+    GeneratedFile,
+)
 from app.models.client import Client
 from app.models.decision import Decision
 from app.models.document_version import DocumentVersion, DocumentType
@@ -23,7 +31,13 @@ from app.models.user import User, UserRole
 __all__ = [
     "Architecture",
     "ArchitectureStatus",
+    "Build",
+    "BuildStage",
+    "BuildStageRun",
+    "BuildStatus",
     "Client",
+    "FileStatus",
+    "GeneratedFile",
     "Decision",
     "DocumentType",
     "DocumentVersion",

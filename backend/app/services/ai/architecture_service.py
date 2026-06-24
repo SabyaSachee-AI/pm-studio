@@ -22,6 +22,7 @@ from app.schemas.architecture import (
     ApiSchema,
     ApiShellSchema,
     DatabaseSchema,
+    DiagramMermaidSchema,
     FrontendSchema,
     SecuritySchema,
     SystemArchSchema,
@@ -40,7 +41,7 @@ from app.services.ai.architecture_consistency import (
     validate_suite,
 )
 from app.services.ai.base import ai_call
-from app.services.ai.mermaid_sanitize import sanitize_doc_diagrams
+from app.services.ai.mermaid_sanitize import sanitize_doc_diagrams, sanitize_mermaid
 from app.services.prd.source import resolve_prd_for_downstream
 from app.services.requirement.source import get_finalized_draft, is_requirement_finalized
 
@@ -61,6 +62,167 @@ ARCH_DOC_KEYS: list[tuple[str, str]] = [
 ]
 
 COMPLETED_STATUSES = frozenset({"completed", "generated"})
+
+# Diagrams built on the frontend from structured doc data — not AI-regeneratable.
+PROGRAMMATIC_DIAGRAMS: dict[str, frozenset[str]] = {
+    "doc_system_arch": frozenset({"system_overview", "data_flow"}),
+    "doc_database": frozenset({"erd"}),
+    "doc_api": frozenset({"auth_flow", "request_flow"}),
+    "doc_frontend": frozenset({"routing", "component_tree"}),
+    "doc_security": frozenset({"auth_flow", "rbac"}),
+}
+
+# Expected AI-only diagram slots per document (shown even when missing).
+AI_DIAGRAM_SLOTS: dict[str, list[str]] = {
+    "doc_system_arch": ["deployment"],
+    "doc_security": ["rbac_flow"],
+    "doc_uiux": ["user_flow", "page_layout"],
+}
+
+DIAGRAM_TYPE_HINTS: dict[str, str] = {
+    "deployment": "flowchart TD showing infrastructure deployment (servers, containers, cloud services, ports)",
+    "data_flow": "flowchart LR showing data flow between system components",
+    "request_flow": "sequenceDiagram showing a typical authenticated API request lifecycle",
+    "rbac_flow": "flowchart LR showing RBAC authorization from JWT to role permissions",
+    "user_flow": "flowchart TD showing primary user journeys through the application",
+    "page_layout": "flowchart TD showing page layout sections and component hierarchy",
+}
+
+
+def is_diagram_regeneratable(
+    doc_field: str,
+    diagram_name: str,
+    existing_doc: dict[str, Any] | None,
+) -> bool:
+    """Return True when a diagram may be (re)generated via targeted AI."""
+    if diagram_name in PROGRAMMATIC_DIAGRAMS.get(doc_field, frozenset()):
+        return False
+    diagrams = (existing_doc or {}).get("diagrams") or {}
+    if isinstance(diagrams, dict) and diagram_name in diagrams:
+        return True
+    return diagram_name in AI_DIAGRAM_SLOTS.get(doc_field, [])
+
+
+async def run_single_architecture_diagram(
+    architecture_id: UUID,
+    doc_field: str,
+    diagram_name: str,
+    db: Session,
+) -> dict[str, str]:
+    """Generate or fix one AI diagram and patch doc.diagrams[name] only."""
+    arch = db.query(Architecture).filter(Architecture.id == architecture_id).first()
+    if not arch:
+        return {"error": "Architecture not found", "doc_key": doc_field, "diagram_name": diagram_name}
+
+    from app.models.prd import PRD  # noqa: PLC0415
+    from app.models.project import Project  # noqa: PLC0415
+    from app.models.srs import SRS  # noqa: PLC0415
+
+    existing_doc = getattr(arch, doc_field, None)
+    if not existing_doc or not isinstance(existing_doc, dict):
+        return {"error": "Document has no content", "doc_key": doc_field, "diagram_name": diagram_name}
+
+    if not is_diagram_regeneratable(doc_field, diagram_name, existing_doc):
+        return {
+            "error": "This diagram is built from document data; use document regenerate instead",
+            "doc_key": doc_field,
+            "diagram_name": diagram_name,
+        }
+
+    srs = db.query(SRS).filter(SRS.id == arch.srs_id).first()
+    project = db.query(Project).filter(Project.id == arch.project_id).first()
+    if not srs or not srs.content_json:
+        return {"error": "SRS has no content", "doc_key": doc_field, "diagram_name": diagram_name}
+
+    project_name = project.name if project else "Project"
+    doc_context = {k: v for k, v in existing_doc.items() if k != "diagrams"}
+    doc_context_json = json.dumps(doc_context, separators=(",", ":"), default=str)[:12000]
+    broken = str((existing_doc.get("diagrams") or {}).get(diagram_name) or "")
+
+    type_hint = DIAGRAM_TYPE_HINTS.get(
+        diagram_name,
+        f"Mermaid {diagram_name.replace('_', ' ')} diagram for this architecture document",
+    )
+    prompt = f"""Generate ONE Mermaid diagram named "{diagram_name}" for the architecture document "{doc_field}".
+
+Project: {project_name}
+
+DOCUMENT CONTENT (use as source of truth):
+{doc_context_json}
+
+Diagram purpose: {type_hint}
+"""
+    if broken.strip():
+        prompt += (
+            f"\nPREVIOUS ATTEMPT (invalid Mermaid — fix syntax, preserve intent):\n"
+            f"{broken[:4000]}\n"
+        )
+    prompt += MERMAID_RULES
+    prompt += '\n\nReturn ONLY valid Mermaid source in the "mermaid" field. No markdown fences.'
+
+    status_msg = f"Regenerating {diagram_name.replace('_', ' ')} diagram..."
+    arch.generation_progress = {
+        "current_doc": doc_field,
+        "phase": "diagram",
+        "diagram_name": diagram_name,
+        "message": status_msg,
+    }
+    arch.last_error = None
+    db.commit()
+
+    set_architecture_context(architecture_id, doc_field)
+    await update_job_status(architecture_id, "processing", message=status_msg)
+
+    try:
+        result = await ai_call(
+            prompt=prompt,
+            response_model=DiagramMermaidSchema,
+            system=(
+                "You are a senior software architect. Output strictly valid Mermaid syntax. "
+                "Return structured JSON with a single mermaid field."
+            ),
+            max_tokens=4000,
+            task_type="arch_generate",
+            screen="architecture",
+        )
+        mermaid = sanitize_mermaid(result.mermaid)
+        if not mermaid:
+            raise ValueError("AI returned empty diagram")
+
+        updated_doc = dict(existing_doc)
+        diagrams = dict(updated_doc.get("diagrams") or {})
+        diagrams[diagram_name] = mermaid
+        updated_doc["diagrams"] = diagrams
+        setattr(arch, doc_field, updated_doc)
+        arch.generation_progress = None
+        arch.generation_task_id = None
+        db.commit()
+        await update_job_status(architecture_id, "completed", message=f"{diagram_name} diagram ready")
+        return {
+            "status": "completed",
+            "doc_key": doc_field,
+            "diagram_name": diagram_name,
+        }
+    except Exception as exc:
+        logger.exception(
+            "Architecture diagram regeneration failed",
+            extra={"doc": doc_field, "diagram": diagram_name, "arch_id": str(architecture_id)},
+        )
+        arch = db.query(Architecture).filter(Architecture.id == architecture_id).first()
+        if arch is not None:
+            # A single diagram failing is non-critical — never poison the
+            # suite-level last_error / generation_task_id (the docs are fine).
+            arch.generation_progress = None
+            arch.generation_task_id = None
+            db.commit()
+        return {
+            "error": str(exc)[:500],
+            "doc_key": doc_field,
+            "diagram_name": diagram_name,
+            "status": "failed",
+        }
+    finally:
+        clear_architecture_context()
 
 
 def _srs_summary(srs_content: dict[str, Any]) -> str:
@@ -124,6 +286,73 @@ def _prd_brief_block(prd_content: dict[str, Any] | None) -> str:
         "success_metrics": prd_content.get("success_metrics") or [],
     }
     return f"\n\nPRD CONTEXT:\n{json.dumps(prd_brief, separators=(',', ':'), default=str)}"
+
+
+_AVAILABILITY_DOWNTIME = {
+    "99": "~14.4 min/day, 7.3 hr/month",
+    "99.9": "~1.44 min/day, 43.8 min/month",
+    "99.99": "~8.6 s/day, 4.4 min/month",
+    "99.999": "~0.86 s/day, 26 s/month",
+}
+
+
+def _nfr_brief_block(nfr_profile: dict[str, Any] | None) -> str:
+    """Compact non-functional constraints block — drives right-sized design."""
+    if not nfr_profile:
+        return ""
+    p = nfr_profile
+    avail = str(p.get("availability") or "").replace("%", "")
+    budget = _AVAILABILITY_DOWNTIME.get(avail, "")
+    fields = {
+        "expected_scale": p.get("scale"),
+        "availability_target": (f"{avail}% ({budget})" if budget else (p.get("availability") or None)),
+        "latency_target": p.get("latency"),
+        "rto": p.get("rto"),
+        "rpo": p.get("rpo"),
+        "compliance": p.get("compliance"),
+        "budget_tier": p.get("budget"),
+        "time_to_market": p.get("time_to_market"),
+        "deploy_target": p.get("deploy_target"),
+    }
+    fields = {k: v for k, v in fields.items() if v}
+    if not fields:
+        return ""
+    return (
+        "\n\nNON-FUNCTIONAL CONSTRAINTS (the design MUST meet these and be RIGHT-SIZED "
+        "to them — do NOT over-engineer beyond the stated scale/budget, and do NOT "
+        "under-provision below the availability/RTO/RPO targets):\n"
+        + json.dumps(fields, separators=(",", ":"), default=str)
+    )
+
+
+_RELIABILITY_INSTRUCTION = (
+    "\n\nAlso populate a 'reliability' object for this system document, sized to the "
+    "constraints above: {availability_target, downtime_budget, rto, rpo, "
+    "backup_and_dr, failure_modes:[{component,failure,mitigation}], redundancy, "
+    "scaling_strategy, capacity_assumptions, performance_targets}."
+)
+
+_CAPABILITY_LINES = {
+    "pwa": "Installable PWA — web app manifest, service worker, app icons, 'add to home screen', mobile-first responsive layout.",
+    "offline": "Offline support — cache the app shell + key data; work without network and sync on reconnect.",
+    "voice": "Voice input — microphone capture (MediaRecorder / Web Speech API) + speech-to-text; handle mic permissions and errors.",
+    "camera": "Camera — photo/video capture with permission handling.",
+    "geolocation": "Geolocation — location access with permission handling.",
+    "integration_api": "Public integration API — API-key auth, webhooks for key events, and a published OpenAPI/Swagger spec so other systems can connect.",
+}
+
+
+def _capabilities_block(capabilities: dict[str, Any] | None) -> str:
+    """Optional capability requirements injected into architecture prompts."""
+    if not capabilities:
+        return ""
+    lines = [_CAPABILITY_LINES[k] for k in _CAPABILITY_LINES if capabilities.get(k)]
+    if not lines:
+        return ""
+    return (
+        "\n\nREQUIRED CAPABILITIES (design and implement these explicitly across the "
+        "relevant documents — frontend, API, security):\n- " + "\n- ".join(lines)
+    )
 
 
 MERMAID_RULES = """
@@ -220,6 +449,8 @@ async def generate_single_document(
     instructions: str = "",
     existing_doc: dict[str, Any] | None = None,
     requirements_context: str = "",
+    nfr_profile: dict[str, Any] | None = None,
+    capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate one architecture document via AI."""
     schema = next(s for f, _, s in DOCUMENT_ORDER if f == doc_field)
@@ -235,6 +466,13 @@ async def generate_single_document(
     if cross_doc_context:
         prompt += f"\n\nPRIOR DOCUMENTS:\n{cross_doc_context}"
     prompt += _prd_brief_block(prd_content)
+    # Non-functional constraints drive right-sized, reliability-aware design.
+    nfr_block = _nfr_brief_block(nfr_profile)
+    if nfr_block:
+        prompt += nfr_block
+        if doc_field == "doc_system_arch":
+            prompt += _RELIABILITY_INSTRUCTION
+    prompt += _capabilities_block(capabilities)
     if requirements_context:
         prompt += f"\n\nORIGINAL REQUIREMENTS (source of truth — features/decisions confirmed by client):\n{requirements_context}"
     if existing_doc:
@@ -281,6 +519,8 @@ async def generate_single_doc_with_instructions(
     cross_doc_context: str = "",
     task_type: str = "arch_generate",
     requirements_context: str = "",
+    nfr_profile: dict[str, Any] | None = None,
+    capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return await generate_single_document(
         doc_field,
@@ -293,6 +533,8 @@ async def generate_single_doc_with_instructions(
         instructions=instructions,
         existing_doc=existing_doc,
         requirements_context=requirements_context,
+        nfr_profile=nfr_profile,
+        capabilities=capabilities,
     )
 
 
@@ -307,6 +549,8 @@ async def generate_api_document_chunked(
     cross_doc_context: str = "",
     task_type: str = "arch_generate",
     requirements_context: str = "",
+    nfr_profile: dict[str, Any] | None = None,
+    capabilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate API doc in chunks — shell first, then endpoint groups by FR batch."""
     srs_summary = _srs_summary(srs_content)
@@ -362,6 +606,8 @@ async def generate_api_document_chunked(
     if cross_doc_context:
         base_prompt += f"\n\nPRIOR DOCUMENTS:\n{cross_doc_context}"
     base_prompt += _prd_brief_block(prd_content)
+    base_prompt += _nfr_brief_block(nfr_profile)
+    base_prompt += _capabilities_block(capabilities)
     if requirements_context:
         base_prompt += f"\n\nORIGINAL REQUIREMENTS (source of truth):\n{requirements_context}"
 
@@ -521,6 +767,8 @@ async def run_single_architecture_doc(
         .all()
     )
     requirements_context = _requirements_brief(reqs)
+    nfr_profile = getattr(arch, "nfr_profile", None)
+    capabilities = getattr(arch, "capabilities", None)
 
     suite_canon = getattr(arch, "suite_canon", None) or build_suite_canon_from_srs(
         srs.content_json,
@@ -577,6 +825,8 @@ async def run_single_architecture_doc(
                 suite_canon=suite_canon,
                 cross_doc_context=cross_doc_context,
                 requirements_context=requirements_context,
+                nfr_profile=nfr_profile,
+                capabilities=capabilities,
             )
         elif doc_field == "doc_api":
             result = await generate_api_document_chunked(
@@ -589,6 +839,8 @@ async def run_single_architecture_doc(
                 cross_doc_context=cross_doc_context,
                 task_type=task_type,
                 requirements_context=requirements_context,
+                nfr_profile=nfr_profile,
+                capabilities=capabilities,
             )
         else:
             result = await generate_single_document(
@@ -600,6 +852,8 @@ async def run_single_architecture_doc(
                 suite_canon=suite_canon,
                 cross_doc_context=cross_doc_context,
                 requirements_context=requirements_context,
+                nfr_profile=nfr_profile,
+                capabilities=capabilities,
             )
 
         arch = db.query(Architecture).filter(Architecture.id == architecture_id).first()
@@ -673,11 +927,15 @@ async def generate_full_architecture(
     resume: bool = False,
     prd_content: dict[str, Any] | None = None,
     requirements_context: str = "",
+    nfr_profile: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Generate documents one at a time, saving after each."""
     arch = db.query(Architecture).filter(Architecture.id == architecture_id).first()
     if not arch:
         return {"error": "Architecture not found"}
+    if nfr_profile is None:
+        nfr_profile = getattr(arch, "nfr_profile", None)
+    capabilities = getattr(arch, "capabilities", None)
 
     arch.can_resume = False
     arch.last_error = None
@@ -704,6 +962,8 @@ async def generate_full_architecture(
             result = await generate_single_document(
                 doc_field, srs_content, project_info, prd_content,
                 requirements_context=requirements_context,
+                nfr_profile=nfr_profile,
+                capabilities=capabilities,
             )
             setattr(arch, doc_field, result)
             setattr(arch, status_field, "completed")
@@ -732,6 +992,7 @@ async def generate_full_architecture(
                 result = await generate_single_document(
                     doc_field, srs_content, project_info, prd_content,
                     requirements_context=requirements_context,
+                    nfr_profile=nfr_profile,
                 )
                 setattr(arch, doc_field, result)
                 setattr(arch, status_field, "completed")
@@ -908,8 +1169,9 @@ async def consolidate_architecture_suite(
     )
 
     docs = collect_docs_from_architecture(arch)
+    nfr_profile = getattr(arch, "nfr_profile", None)
     fixed = apply_deterministic_fixes(docs, srs.content_json, canon)
-    report = validate_suite(fixed, srs.content_json, canon)
+    report = validate_suite(fixed, srs.content_json, canon, nfr_profile=nfr_profile)
 
     if ai_repair and report.get("overall", 0) < 9.5:
         repair_fields = []
@@ -948,7 +1210,7 @@ async def consolidate_architecture_suite(
             )
             fixed[field] = regenerated
         fixed = apply_deterministic_fixes(fixed, srs.content_json, canon)
-        report = validate_suite(fixed, srs.content_json, canon)
+        report = validate_suite(fixed, srs.content_json, canon, nfr_profile=nfr_profile)
 
     persist_fixed_docs(arch, fixed)
     arch.suite_canon = canon

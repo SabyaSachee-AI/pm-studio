@@ -95,6 +95,12 @@ class Architecture(TimeStampedModel):
     resume_from: Mapped[str | None] = mapped_column(String(64), nullable=True)
     suite_canon: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     consistency_report: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Optional non-functional profile (scale, availability, RTO/RPO, compliance,
+    # budget…) — drives reliability-aware, right-sized architecture generation.
+    nfr_profile: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Optional capability flags (PWA, voice/mic, camera, geolocation, public API)
+    # — conditionally extend generation; off/None = standard web app, unchanged.
+    capabilities: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     doc_system_arch: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     doc_database: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

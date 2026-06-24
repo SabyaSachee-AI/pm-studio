@@ -35,6 +35,11 @@ logs/
 # Dev scratch — code/notes extracted from transcripts (not for the repo)
 _extracted_from_transcript/
 
+# Database dumps / backups — never commit (may contain real data)
+*.dump
+*.sql.gz
+*.backup
+
 # OS
 .DS_Store
 Thumbs.db

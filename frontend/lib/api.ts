@@ -123,6 +123,44 @@ export interface Project {
   created_at: string;
 }
 
+export interface BuildSummary {
+  id: string;
+  project_id: string;
+  architecture_id: string | null;
+  status: string;
+  version: number;
+  display_name: string | null;
+  repo_url: string | null;
+  github_full_name: string | null;
+  default_branch: string;
+  quality_score: number | null;
+  quality_report: Record<string, unknown> | null;
+  generation_progress: Record<string, unknown> | null;
+  generation_task_id: string | null;
+  can_resume: boolean;
+  last_error: string | null;
+  file_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GeneratedFileListItem {
+  id: string;
+  task_id: string | null;
+  path: string;
+  language: string;
+  status: string;
+}
+
+export interface GeneratedFile extends GeneratedFileListItem {
+  content: string;
+  checksum: string | null;
+}
+
+export interface BuildDetail extends BuildSummary {
+  files: GeneratedFileListItem[];
+}
+
 export interface Requirement {
   id: string;
   project_id: string;
@@ -200,6 +238,8 @@ export interface Architecture {
     missing_frs?: string[];
     edited_docs?: string[];
   } | null;
+  nfr_profile?: Record<string, string> | null;
+  capabilities?: Record<string, boolean> | null;
 }
 
 export interface ArchitectureListItem {
@@ -833,6 +873,18 @@ export class ApiClient {
   async finalizeArchitecture(id: string): Promise<Architecture> {
     return this.request(`/architecture/${id}/finalize`, { method: "PATCH" });
   }
+  async setNfrProfile(id: string, profile: Record<string, string>): Promise<Architecture> {
+    return this.request(`/architecture/${id}/nfr-profile`, {
+      method: "PATCH",
+      body: JSON.stringify({ nfr_profile: profile }),
+    });
+  }
+  async setCapabilities(id: string, capabilities: Record<string, boolean>): Promise<Architecture> {
+    return this.request(`/architecture/${id}/capabilities`, {
+      method: "PATCH",
+      body: JSON.stringify({ capabilities }),
+    });
+  }
   async updateArchitectureDoc(
     id: string,
     docKey: string,
@@ -909,6 +961,23 @@ export class ApiClient {
       method: "POST",
     });
   }
+  async regenerateArchitectureDiagram(
+    id: string,
+    docKey: string,
+    diagramName: string,
+    model?: ModelChoice | null,
+  ) {
+    return this.request<{
+      architecture_id: string;
+      doc_key: string;
+      diagram_name: string;
+      task_id: string;
+      status: string;
+    }>(
+      `/architecture/${id}/regenerate-diagram/${docKey}/${diagramName}${this.modelQS(model)}`,
+      { method: "POST" },
+    );
+  }
   async deleteArchitectureDoc(id: string, docKey: string): Promise<Architecture> {
     return this.request(`/architecture/${id}/doc/${docKey}`, { method: "DELETE" });
   }
@@ -982,6 +1051,102 @@ export class ApiClient {
   }
   async getProjectBible(projectId: string): Promise<{ content: string; project_name: string }> {
     return this.request(`/tasks/project-bible/${projectId}`);
+  }
+
+  // ── Code-generation builds ──────────────────────────────────────────────
+  async listBuilds(projectId?: string): Promise<BuildSummary[]> {
+    const qs = projectId ? `?project_id=${projectId}` : "";
+    return this.request(`/builds${qs}`);
+  }
+  async createBuild(projectId: string, architectureId?: string): Promise<BuildSummary> {
+    return this.request(`/builds`, {
+      method: "POST",
+      body: JSON.stringify({ project_id: projectId, architecture_id: architectureId ?? null }),
+    });
+  }
+  async getBuild(id: string): Promise<BuildDetail> {
+    return this.request(`/builds/${id}`);
+  }
+  async getBuildFile(id: string, fileId: string): Promise<GeneratedFile> {
+    return this.request(`/builds/${id}/file/${fileId}`);
+  }
+  async scaffoldBuild(id: string, model?: ModelChoice | null) {
+    return this.request<{ build_id: string; task_id: string; status: string }>(
+      `/builds/${id}/scaffold${this.modelQS(model)}`, { method: "POST" });
+  }
+  async generateBuild(id: string, resume = false, model?: ModelChoice | null) {
+    const sep = this.modelQS(model) ? "&" : "?";
+    return this.request<{ build_id: string; task_id: string; status: string }>(
+      `/builds/${id}/generate${this.modelQS(model)}${sep}resume=${resume}`, { method: "POST" });
+  }
+  async generateTaskCode(id: string, taskId: string, model?: ModelChoice | null) {
+    return this.request<{ build_id: string; task_id: string; status: string }>(
+      `/builds/${id}/generate-task/${taskId}${this.modelQS(model)}`, { method: "POST" });
+  }
+  async updateBuildFile(id: string, fileId: string, content: string): Promise<GeneratedFile> {
+    return this.request(`/builds/${id}/file/${fileId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ content }),
+    });
+  }
+  async aiEditBuildFile(id: string, fileId: string, instruction: string, model?: ModelChoice | null): Promise<GeneratedFile> {
+    return this.request(`/builds/${id}/file/${fileId}/ai-edit${this.modelQS(model)}`, {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    });
+  }
+  async pushBuild(id: string) {
+    return this.request<{ build_id: string; task_id: string; status: string }>(
+      `/builds/${id}/push`, { method: "POST" });
+  }
+  async getBuildQa(id: string): Promise<{
+    status?: string;
+    conclusion?: string | null;
+    run_url?: string;
+    quality_score?: number | null;
+    message?: string;
+    error?: string;
+  }> {
+    return this.request(`/builds/${id}/qa`);
+  }
+  async repairBuild(id: string) {
+    return this.request<{ build_id: string; task_id: string; status: string }>(
+      `/builds/${id}/repair`, { method: "POST" });
+  }
+  async generateBuildTests(id: string, model?: ModelChoice | null) {
+    return this.request<{ build_id: string; task_id: string; status: string }>(
+      `/builds/${id}/generate-tests${this.modelQS(model)}`, { method: "POST" });
+  }
+  async polishBuild(id: string, scope: "critical" | "all", model?: ModelChoice | null) {
+    const sep = this.modelQS(model) ? "&" : "?";
+    return this.request<{ build_id: string; task_id: string; status: string }>(
+      `/builds/${id}/polish${this.modelQS(model)}${sep}scope=${scope}`, { method: "POST" });
+  }
+  async getBuildUiChecklist(id: string): Promise<{
+    repo_url: string | null;
+    clone_cmd: string;
+    run_cmd: string;
+    items: { key: string; task_title: string; criterion: string }[];
+  }> {
+    return this.request(`/builds/${id}/ui-checklist`);
+  }
+  async saveBuildUiTest(
+    id: string,
+    results: { key: string; status: string; note: string }[],
+    signedOff: boolean,
+  ): Promise<BuildSummary> {
+    return this.request(`/builds/${id}/ui-test`, {
+      method: "POST",
+      body: JSON.stringify({ results, signed_off: signedOff }),
+    });
+  }
+  async deployBuild(id: string, port?: number) {
+    const qs = port ? `?port=${port}` : "";
+    return this.request<{ build_id: string; task_id: string; status: string }>(
+      `/builds/${id}/deploy${qs}`, { method: "POST" });
+  }
+  async deleteBuild(id: string): Promise<void> {
+    return this.request(`/builds/${id}`, { method: "DELETE" });
   }
   async getTraceability(projectId: string): Promise<any> {
     return this.request(`/tasks/traceability/${projectId}`);
@@ -1145,6 +1310,35 @@ export class ApiClient {
         is_enabled: isEnabled,
       }),
     });
+  }
+  async getGithubConfig(): Promise<{
+    configured: boolean;
+    masked_token: string | null;
+    owner: string | null;
+    source: string;
+  }> {
+    return this.request("/admin/ai-config/github");
+  }
+  async setGithubConfig(token: string | null, owner: string | null): Promise<{
+    configured: boolean;
+    masked_token: string | null;
+    owner: string | null;
+    source: string;
+  }> {
+    return this.request("/admin/ai-config/github", {
+      method: "PATCH",
+      body: JSON.stringify({ token, owner }),
+    });
+  }
+  async getVpsConfig(): Promise<{
+    configured: boolean; host: string | null; user: string | null; path: string | null; has_key: boolean;
+  }> {
+    return this.request("/admin/ai-config/vps");
+  }
+  async setVpsConfig(cfg: { host?: string; user?: string; ssh_key?: string; path?: string }): Promise<{
+    configured: boolean; host: string | null; user: string | null; path: string | null; has_key: boolean;
+  }> {
+    return this.request("/admin/ai-config/vps", { method: "PATCH", body: JSON.stringify(cfg) });
   }
 
   // Users (admin)

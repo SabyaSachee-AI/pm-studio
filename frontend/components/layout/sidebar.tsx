@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { href: "/srs",               screen: "srs",            label: "SRS",          icon: "ti-file-text" },
   { href: "/architecture",      screen: "architecture",   label: "Architecture", icon: "ti-sitemap" },
   { href: "/tasks",             screen: "tasks",          label: "Kanban",       icon: "ti-columns" },
+  { href: "/build",             screen: "tasks",          label: "Build",        icon: "ti-code" },
   { href: "/traceability",      screen: "traceability",   label: "Traceability", icon: "ti-git-commit" },
   { href: "/knowledge",         screen: "knowledge_base", label: "Knowledge",    icon: "ti-brain" },
   { href: "/decisions",         screen: "decisions",      label: "Decisions",    icon: "ti-scale" },

@@ -177,6 +177,39 @@ export function buildAuthFlowDiagram(): string {
   API -->> C: user profile`;
 }
 
+/** Build a data-flow flowchart from the ordered data_flow steps. */
+export function buildDataFlowDiagram(steps: string[]): string {
+  const clean = (steps ?? []).map((s) => String(s ?? "").trim()).filter(Boolean);
+  if (!clean.length) return "";
+  const lines = ["flowchart TD"];
+  const ids: string[] = [];
+  clean.slice(0, 16).forEach((step, i) => {
+    const id = `DF${i}`;
+    ids.push(id);
+    lines.push(`  ${id}[${nodeLabel(step)}]`);
+  });
+  for (let i = 0; i < ids.length - 1; i += 1) {
+    lines.push(`  ${ids[i]} --> ${ids[i + 1]}`);
+  }
+  return lines.join("\n");
+}
+
+/** Build a standard authenticated API request lifecycle sequence diagram. */
+export function buildRequestFlowDiagram(): string {
+  return `sequenceDiagram
+  participant C as "Client"
+  participant FE as "Next.js"
+  participant API as "FastAPI"
+  participant DB as "PostgreSQL"
+  C ->> FE: user action
+  FE ->> API: request /api/v1/... (HttpOnly cookie)
+  API ->> API: verify JWT + RBAC
+  API ->> DB: query
+  DB -->> API: rows
+  API -->> FE: JSON response
+  FE -->> C: render result`;
+}
+
 /** Build security RBAC flowchart from roles */
 export function buildRbacDiagram(roles: Array<string | Record<string, unknown>>): string {
   if (!roles.length) return "";
@@ -209,6 +242,8 @@ export function buildDiagramsForDoc(
     const components = (doc.components as Array<Record<string, unknown>>) ?? [];
     const sys = buildSystemOverviewDiagram(components);
     if (sys) out.system_overview = sys;
+    const dataFlow = buildDataFlowDiagram((doc.data_flow as string[]) ?? []);
+    if (dataFlow) out.data_flow = dataFlow;
   } else if (docKey === "doc_database") {
     const tables = (doc.tables as Array<Record<string, unknown>>) ?? [];
     const relationships = (doc.relationships as Array<Record<string, string>>) ?? [];
@@ -216,6 +251,7 @@ export function buildDiagramsForDoc(
     if (erd) out.erd = erd;
   } else if (docKey === "doc_api") {
     out.auth_flow = buildAuthFlowDiagram();
+    out.request_flow = buildRequestFlowDiagram();
   } else if (docKey === "doc_frontend") {
     const pages = (doc.pages as Array<Record<string, unknown>>) ?? [];
     const routing = buildRoutingDiagram(pages);
@@ -237,4 +273,47 @@ export function buildDiagramsForDoc(
     }
   }
   return out;
+}
+
+/** Diagrams built from structured doc data — retry render only, no AI regen. */
+export const PROGRAMMATIC_DIAGRAM_KEYS: Record<string, readonly string[]> = {
+  doc_system_arch: ["system_overview", "data_flow"],
+  doc_database: ["erd"],
+  doc_api: ["auth_flow", "request_flow"],
+  doc_frontend: ["routing", "component_tree"],
+  doc_security: ["auth_flow", "rbac"],
+};
+
+/** Expected AI-only diagram slots (shown even when missing). */
+export const AI_DIAGRAM_SLOTS: Record<string, readonly string[]> = {
+  doc_system_arch: ["deployment"],
+  doc_security: ["rbac_flow"],
+  doc_uiux: ["user_flow", "page_layout"],
+};
+
+export function isProgrammaticDiagram(docKey: string, diagramName: string): boolean {
+  return (PROGRAMMATIC_DIAGRAM_KEYS[docKey] ?? []).includes(diagramName);
+}
+
+export function isAiRegeneratableDiagram(
+  docKey: string,
+  diagramName: string,
+  doc: Record<string, unknown> | null | undefined,
+): boolean {
+  if (isProgrammaticDiagram(docKey, diagramName)) return false;
+  const stored = (doc?.diagrams as Record<string, string> | undefined) ?? {};
+  if (stored[diagramName] !== undefined) return true;
+  return (AI_DIAGRAM_SLOTS[docKey] ?? []).includes(diagramName);
+}
+
+/** AI diagram slots that have no stored source yet. */
+export function missingAiDiagramSlots(
+  docKey: string,
+  doc: Record<string, unknown> | null | undefined,
+): string[] {
+  const stored = (doc?.diagrams as Record<string, string> | undefined) ?? {};
+  const built = buildDiagramsForDoc(docKey, doc);
+  return (AI_DIAGRAM_SLOTS[docKey] ?? []).filter(
+    (name) => !stored[name]?.trim() && !built[name]?.trim(),
+  );
 }

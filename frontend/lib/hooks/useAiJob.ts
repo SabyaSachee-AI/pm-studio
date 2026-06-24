@@ -39,6 +39,19 @@ function extractTokenCount(payload: Record<string, unknown>): number | undefined
   return undefined;
 }
 
+/** Turn raw Celery/worker errors into human-readable guidance. */
+function humanizeJobError(raw: string): string {
+  const msg = String(raw ?? "").trim();
+  if (!msg) return "Job failed";
+  // Celery NotRegistered serialises as just the dotted task name, e.g.
+  // 'architecture.regenerate_diagram' — means the worker is running old code.
+  if (/^['"]?[a-z][a-z0-9_]*\.[a-z0-9_.]+['"]?$/i.test(msg) || /NotRegistered/i.test(msg)) {
+    return "The background worker is out of date for this task. Restart the Celery worker and try again.";
+  }
+  if (/rate.?limit/i.test(msg)) return "AI provider rate limit reached. Wait a moment and retry.";
+  return msg.length > 200 ? `${msg.slice(0, 200)}…` : msg;
+}
+
 function mapCeleryStatus(raw: string): AiJobStatus {
   const status = raw.toUpperCase();
   if (status === "SUCCESS" || status === "COMPLETED") return "completed";
@@ -200,7 +213,7 @@ export function useAiJob(options: UseAiJobOptions = {}) {
           setStatus("processing");
         }
         else if (mapped === "completed") completeJob(tokens);
-        else if (mapped === "failed") failJob(String(data.error ?? "Job failed"));
+        else if (mapped === "failed") failJob(humanizeJobError(String(data.error ?? "")));
 
         if (TERMINAL.has(rawStatus.toUpperCase()) && pollRef.current) {
           clearInterval(pollRef.current);

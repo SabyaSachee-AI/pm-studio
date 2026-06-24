@@ -1,5 +1,6 @@
 """Architecture Suite API endpoints."""
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
@@ -36,6 +37,7 @@ from app.workers.architecture_tasks import (
     generate_architecture_doc_task,
     generate_architecture_task,
     reassess_architecture_task,
+    regenerate_architecture_diagram_task,
     regenerate_architecture_doc_task,
 )
 
@@ -64,6 +66,14 @@ class ArchitecturePolishExportRequest(BaseModel):
 
 class ArchitectureSuiteEditRequest(BaseModel):
     instruction: str
+
+
+class NfrProfileRequest(BaseModel):
+    nfr_profile: dict[str, Any]
+
+
+class CapabilitiesRequest(BaseModel):
+    capabilities: dict[str, Any]
 
 
 def _prd_eligible(prd: PRD) -> bool:
@@ -141,6 +151,8 @@ def _to_response(arch: Architecture) -> ArchitectureResponse:
         resume_from=arch.resume_from,
         suite_canon=arch.suite_canon,
         consistency_report=arch.consistency_report,
+        nfr_profile=arch.nfr_profile,
+        capabilities=arch.capabilities,
         created_at=arch.created_at,
         updated_at=arch.updated_at,
         doc_system_arch=arch.doc_system_arch,
@@ -275,6 +287,38 @@ async def get_architecture(
     _current_user: User = Depends(get_current_user),
 ) -> ArchitectureResponse:
     arch = await _load_architecture(arch_id, db)
+    return _to_response(arch)
+
+
+@router.patch("/{arch_id}/nfr-profile", response_model=ArchitectureResponse)
+async def set_nfr_profile(
+    arch_id: UUID,
+    body: NfrProfileRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("architecture", "edit")),
+) -> ArchitectureResponse:
+    """Save the non-functional profile that drives reliability-aware generation."""
+    arch = await _load_architecture(arch_id, db)
+    arch.nfr_profile = body.nfr_profile or None
+    await db.commit()
+    await db.refresh(arch)
+    return _to_response(arch)
+
+
+@router.patch("/{arch_id}/capabilities", response_model=ArchitectureResponse)
+async def set_capabilities(
+    arch_id: UUID,
+    body: CapabilitiesRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("architecture", "edit")),
+) -> ArchitectureResponse:
+    """Save optional capability flags (PWA, voice, camera, geolocation, public API)."""
+    arch = await _load_architecture(arch_id, db)
+    # keep only truthy flags; empty → None (standard web app)
+    flags = {k: True for k, v in (body.capabilities or {}).items() if v}
+    arch.capabilities = flags or None
+    await db.commit()
+    await db.refresh(arch)
     return _to_response(arch)
 
 
@@ -678,6 +722,61 @@ async def regenerate_architecture_doc(
     await db.commit()
     return {
         "architecture_id": str(arch.id),
+        "task_id": task.id,
+        "status": "generating",
+    }
+
+
+@router.post(
+    "/{arch_id}/regenerate-diagram/{doc_key}/{diagram_name}",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def regenerate_architecture_diagram(
+    arch_id: UUID,
+    doc_key: str,
+    diagram_name: str,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("architecture", "edit")),
+) -> dict[str, str]:
+    """Regenerate a single AI diagram within one architecture document."""
+    if doc_key not in DOC_FIELDS:
+        raise HTTPException(status_code=400, detail="Invalid document key")
+    if not diagram_name.strip() or not re.match(r"^[a-z][a-z0-9_]*$", diagram_name):
+        raise HTTPException(status_code=400, detail="Invalid diagram name")
+
+    from app.services.ai.architecture_service import is_diagram_regeneratable  # noqa: PLC0415
+
+    arch = await _load_architecture(arch_id, db)
+    existing_doc = getattr(arch, doc_key, None)
+    if not existing_doc:
+        raise HTTPException(status_code=400, detail="Document has no content")
+    if not is_diagram_regeneratable(doc_key, diagram_name, existing_doc):
+        raise HTTPException(
+            status_code=400,
+            detail="This diagram cannot be regenerated with AI",
+        )
+
+    task = regenerate_architecture_diagram_task.delay(
+        str(arch.id),
+        doc_key,
+        diagram_name,
+        model_provider=model_provider,
+        model_id=model_id,
+    )
+    arch.generation_task_id = task.id
+    arch.generation_progress = {
+        "current_doc": doc_key,
+        "phase": "diagram",
+        "diagram_name": diagram_name,
+        "message": f"Regenerating {diagram_name.replace('_', ' ')} diagram...",
+    }
+    await db.commit()
+    return {
+        "architecture_id": str(arch.id),
+        "doc_key": doc_key,
+        "diagram_name": diagram_name,
         "task_id": task.id,
         "status": "generating",
     }

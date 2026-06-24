@@ -45,7 +45,15 @@ interface TraceabilityData {
   } | null;
   tasks: KanbanTask[];
   coverage: { total_frs: number; covered_frs: number; missing_frs: string[]; coverage_pct: number };
+  full_coverage?: {
+    fr: { total_frs: number; covered_frs: number; coverage_pct: number };
+    endpoints: Meter;
+    tables: Meter;
+    nfrs: Meter;
+  };
 }
+
+interface Meter { total: number; covered: number; missing: string[]; pct: number }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -436,6 +444,45 @@ export default function TraceabilityPage() {
               </div>
             )}
           </div>
+
+          {/* ── Completeness coverage (multi-dimensional) ─────────────── */}
+          {data.full_coverage ? (
+            <div className="rounded-xl border border-gray-800 bg-gray-900/30 p-5">
+              <h3 className="mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-gray-500">
+                <i className="ti ti-checklist" aria-hidden /> Completeness coverage
+              </h3>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {([
+                  ["FR → tasks", { total: data.full_coverage.fr.total_frs, covered: data.full_coverage.fr.covered_frs, pct: data.full_coverage.fr.coverage_pct, missing: [] as string[] }],
+                  ["API endpoints", data.full_coverage.endpoints],
+                  ["DB tables", data.full_coverage.tables],
+                  ["Non-functional", data.full_coverage.nfrs],
+                ] as [string, Meter][]).map(([label, m]) => {
+                  const color = m.pct >= 90 ? "bg-emerald-500" : m.pct >= 60 ? "bg-amber-500" : "bg-red-500";
+                  return (
+                    <div key={label} className="rounded-lg border border-gray-800 bg-gray-950/50 p-3">
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-[11px] uppercase tracking-wide text-gray-500">{label}</span>
+                        <span className="text-sm font-semibold text-gray-200">{m.covered}/{m.total}</span>
+                      </div>
+                      <CoverageBar value={m.pct} color={color} />
+                      {m.missing && m.missing.length > 0 ? (
+                        <p className="mt-2 truncate text-[10px] text-gray-600" title={m.missing.join(", ")}>
+                          Missing: {m.missing.slice(0, 3).join(", ")}{m.missing.length > 3 ? `  +${m.missing.length - 3}` : ""}
+                        </p>
+                      ) : (
+                        <p className="mt-2 text-[10px] text-emerald-500/80">Fully covered</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-3 text-[10px] text-gray-600">
+                Heuristic completeness signal — endpoints/tables/NFRs matched to tasks. Run <strong>Solve gaps with AI</strong> or
+                regenerate tasks (completeness pass) to close gaps.
+              </p>
+            </div>
+          ) : null}
 
           {/* ── Architecture checklist ────────────────────────────────── */}
           <div className="rounded-xl border border-gray-800 bg-gray-900/30 p-5">

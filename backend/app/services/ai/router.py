@@ -108,12 +108,12 @@ _PROVIDER_OUTPUT_CAPS: dict[str, int] = {
 def _effective_max_tokens(provider: str, requested: int, task_type: str) -> int:
     """Clamp max_tokens per provider limits. Arch tasks get higher ceilings on capable providers."""
     cap = _PROVIDER_OUTPUT_CAPS.get(provider, requested)
-    if task_type.startswith("arch_"):
-        # Large-context providers can handle full arch doc output without truncation.
+    if task_type.startswith("arch_") or task_type in ("code_generate", "code_polish"):
+        # Large-context providers can handle full arch doc / code output without truncation.
         if provider == "gemini":
             cap = max(cap, 24000)
         elif provider in ("anthropic", "openai", "openrouter", "deepseek", "together",
-                          "siliconflow", "alibaba", "aimlapi"):
+                          "siliconflow", "alibaba", "aimlapi", "huggingface"):
             cap = max(cap, 16000)
     return min(requested, cap)
 
@@ -188,7 +188,7 @@ async def _set_cooling(
 
 
 def _task_timeout_sec(task_type: str) -> float:
-    if task_type.startswith("arch_"):
+    if task_type.startswith("arch_") or task_type in ("code_generate", "code_polish"):
         return float(_ARCH_TASK_TIMEOUT_SEC)
     return float(_DEFAULT_TASK_TIMEOUT_SEC)
 
@@ -359,10 +359,15 @@ class AiRouter:
         assistant_prefill: str = "",
     ) -> T:
         models_in_chain: list[tuple[str, str]] = []
-        for attempt_num in range(1, 16):
+        # Walk the FULL defined chain (deep fallback): try model_1, model_2, …
+        # until there are no more entries — supports 20+ model fallback chains.
+        attempt_num = 1
+        while True:
             entry = routing.get(f"model_{attempt_num}")
-            if entry:
-                models_in_chain.append(entry)
+            if not entry:
+                break
+            models_in_chain.append(entry)
+            attempt_num += 1
 
         if not models_in_chain:
             raise RuntimeError(f"Empty model chain for {task_type}, tier={tier}")

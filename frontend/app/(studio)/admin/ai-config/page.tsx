@@ -427,6 +427,179 @@ function ModelCatalogSection({
 
 type ConfigTab = "guide" | "settings";
 
+function GithubSection() {
+  const [cfg, setCfg] = useState<{ configured: boolean; masked_token: string | null; owner: string | null; source: string } | null>(null);
+  const [token, setToken] = useState("");
+  const [owner, setOwner] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    api.getGithubConfig().then((c) => { setCfg(c); setOwner(c.owner ?? ""); }).catch(() => {});
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setMsg("");
+    try {
+      const c = await api.setGithubConfig(token.trim() ? token.trim() : null, owner.trim() || null);
+      setCfg(c);
+      setToken("");
+      setEditing(false);
+      setMsg("Saved — restart not needed.");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <h2 className="text-lg font-medium">GitHub (Build code factory)</h2>
+      <p className="text-sm text-gray-500">
+        Token used by the Build screen to create repos and push generated code (CI runs there).
+        Needs a fine-grained PAT with Administration + Contents + Workflows write access.
+      </p>
+      <div className="max-w-xl rounded-lg border border-gray-800 bg-gray-950/60 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-gray-200">GitHub repo token</span>
+          <span className={`text-xs font-medium ${cfg?.configured ? "text-green-400" : "text-gray-500"}`}>
+            {cfg?.configured ? `● CONFIGURED (${cfg.source})` : "○ NOT SET"}
+          </span>
+        </div>
+        {cfg?.masked_token && !editing ? (
+          <p className="text-sm text-gray-400">Token: {cfg.masked_token}</p>
+        ) : null}
+
+        <label className="block text-xs text-gray-500">
+          GitHub username / owner
+          <input
+            className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 text-sm text-gray-200"
+            placeholder="e.g. SabyaSachee-AI"
+            value={owner}
+            onChange={(e) => setOwner(e.target.value)}
+          />
+        </label>
+
+        {editing || !cfg?.configured ? (
+          <label className="block text-xs text-gray-500">
+            Fine-grained PAT
+            <input
+              type="password"
+              className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 font-mono text-sm text-gray-200"
+              placeholder="github_pat_…"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+            />
+          </label>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href="https://github.com/settings/personal-access-tokens"
+            target="_blank"
+            rel="noreferrer"
+            className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-900"
+          >
+            Create token ↗
+          </a>
+          {cfg?.configured && !editing ? (
+            <button onClick={() => setEditing(true)} className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-900">
+              Change token
+            </button>
+          ) : null}
+          <button
+            onClick={() => void save()}
+            disabled={saving}
+            className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+          {msg ? <span className="text-xs text-gray-400">{msg}</span> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function VpsSection() {
+  const [cfg, setCfg] = useState<{ configured: boolean; host: string | null; user: string | null; path: string | null; has_key: boolean } | null>(null);
+  const [host, setHost] = useState("");
+  const [user, setUser] = useState("");
+  const [path, setPath] = useState("");
+  const [sshKey, setSshKey] = useState("");
+  const [editingKey, setEditingKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    api.getVpsConfig().then((c) => {
+      setCfg(c); setHost(c.host ?? ""); setUser(c.user ?? ""); setPath(c.path ?? "");
+    }).catch(() => {});
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setMsg("");
+    try {
+      const body: { host?: string; user?: string; ssh_key?: string; path?: string } = {
+        host, user, path,
+      };
+      if (sshKey.trim()) body.ssh_key = sshKey;
+      const c = await api.setVpsConfig(body);
+      setCfg(c); setSshKey(""); setEditingKey(false); setMsg("Saved.");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <h2 className="text-lg font-medium">VPS deploy (Contabo)</h2>
+      <p className="text-sm text-gray-500">
+        Where generated apps deploy. PM Studio sets these as repo secrets and runs the
+        deploy workflow (SSH → <code>git pull &amp;&amp; docker compose up -d --build</code>).
+      </p>
+      <div className="max-w-xl rounded-lg border border-gray-800 bg-gray-950/60 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-gray-200">VPS target</span>
+          <span className={`text-xs font-medium ${cfg?.configured ? "text-green-400" : "text-gray-500"}`}>
+            {cfg?.configured ? "● CONFIGURED" : "○ NOT SET"}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="block text-xs text-gray-500">Host / IP
+            <input className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 text-sm text-gray-200" value={host} onChange={(e) => setHost(e.target.value)} placeholder="123.45.67.89" />
+          </label>
+          <label className="block text-xs text-gray-500">SSH user
+            <input className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 text-sm text-gray-200" value={user} onChange={(e) => setUser(e.target.value)} placeholder="root or deploy" />
+          </label>
+        </div>
+        <label className="block text-xs text-gray-500">App path on VPS
+          <input className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 font-mono text-sm text-gray-200" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/opt/myapp" />
+        </label>
+        {editingKey || !cfg?.has_key ? (
+          <label className="block text-xs text-gray-500">SSH private key
+            <textarea className="mt-1 h-24 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 font-mono text-xs text-gray-200" value={sshKey} onChange={(e) => setSshKey(e.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" />
+          </label>
+        ) : (
+          <p className="text-xs text-gray-500">SSH key: <span className="text-green-400">stored</span> · <button onClick={() => setEditingKey(true)} className="underline">replace</button></p>
+        )}
+        <div className="flex items-center gap-2">
+          <button onClick={() => void save()} disabled={saving} className="rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50">
+            {saving ? "Saving…" : "Save"}
+          </button>
+          {msg ? <span className="text-xs text-gray-400">{msg}</span> : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function AiConfigPage() {
   const [config, setConfig] = useState<AiConfigResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -662,6 +835,9 @@ export default function AiConfigPage() {
           })}
         </div>
       </section>
+
+      <GithubSection />
+      <VpsSection />
 
       {config.model_catalog ? (
         <ModelCatalogSection

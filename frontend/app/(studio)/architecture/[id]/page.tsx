@@ -153,6 +153,8 @@ const CONSISTENCY_LABELS: Record<string, string> = {
   security_api_alignment: "Security",
   mvp_scope: "MVP scope",
   dev_ready: "Dev ready",
+  nfr_coverage: "NFR coverage",
+  right_sizing: "Right-sizing",
 };
 
 // Which doc tab a consistency score maps to (for click-to-edit). dev_ready spans
@@ -184,6 +186,165 @@ function ArchitectureSkeleton() {
   );
 }
 
+const NFR_FIELDS: { key: string; label: string; options: string[] }[] = [
+  { key: "scale", label: "Expected scale", options: ["Small (<1k users)", "Medium (1k–50k)", "Large (50k+)"] },
+  { key: "availability", label: "Availability target", options: ["99%", "99.9%", "99.99%", "99.999%"] },
+  { key: "latency", label: "Latency target", options: ["Relaxed (<1s)", "Standard (<500ms)", "Strict (<200ms)"] },
+  { key: "rto", label: "RTO (recovery time)", options: ["< 24h", "< 4h", "< 1h", "< 15m"] },
+  { key: "rpo", label: "RPO (data loss)", options: ["< 24h", "< 1h", "< 15m", "Near-zero"] },
+  { key: "compliance", label: "Compliance", options: ["None", "GDPR", "HIPAA", "PCI-DSS", "Government / on-prem"] },
+  { key: "budget", label: "Budget tier", options: ["Lean", "Standard", "Enterprise"] },
+  { key: "time_to_market", label: "Time to market", options: ["MVP-fast", "Balanced", "Robust"] },
+  { key: "deploy_target", label: "Deploy target", options: ["Single VPS", "Cloud", "On-prem / air-gapped"] },
+];
+
+function NfrProfilePanel({
+  archId, initial, onSaved,
+}: {
+  archId: string;
+  initial: Record<string, string> | null | undefined;
+  onSaved: (p: Record<string, string>) => void;
+}) {
+  const [open, setOpen] = useState(Boolean(initial && Object.keys(initial).length));
+  const [profile, setProfile] = useState<Record<string, string>>(initial ?? {});
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+  const count = Object.values(profile).filter(Boolean).length;
+
+  async function save() {
+    setSaving(true); setMsg("");
+    try {
+      await api.setNfrProfile(archId, profile);
+      onSaved(profile);
+      setMsg("Saved — used on next Generate/Reassess.");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Save failed");
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="rounded-xl border border-gray-800 bg-gray-900/60">
+      <button type="button" onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-4 py-3 text-left">
+        <span className="flex items-center gap-2 text-sm font-medium text-gray-200">
+          <i className="ti ti-adjustments-alt text-base text-indigo-400" aria-hidden />
+          Non-functional profile
+          <span className="text-xs text-gray-500">{count ? `${count} set — drives reliability & right-sizing` : "optional — drives reliability-aware design"}</span>
+        </span>
+        <i className={`ti ${open ? "ti-chevron-down" : "ti-chevron-right"} text-gray-500`} aria-hidden />
+      </button>
+      {open ? (
+        <div className="border-t border-gray-800 p-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {NFR_FIELDS.map((f) => (
+              <label key={f.key} className="block text-xs text-gray-400">
+                {f.label}
+                <select
+                  title={f.label}
+                  className="mt-1 w-full rounded border border-gray-700 bg-gray-950 px-2 py-1.5 text-sm text-gray-200"
+                  value={profile[f.key] ?? ""}
+                  onChange={(e) => setProfile((p) => ({ ...p, [f.key]: e.target.value }))}
+                >
+                  <option value="">—</option>
+                  {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <Button size="sm" disabled={saving} onClick={() => void save()}>
+              {saving ? "Saving…" : "Save profile"}
+            </Button>
+            {msg ? <span className="text-xs text-gray-400">{msg}</span> : null}
+          </div>
+          <p className="mt-2 text-[11px] text-gray-600">
+            Set this before <strong>Generate</strong> or <strong>Reassess</strong>. It makes the architecture
+            reliability-aware (availability, RTO/RPO, failure modes) and right-sized to your scale & budget.
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const CAPABILITY_OPTIONS: { key: string; label: string; hint: string }[] = [
+  { key: "pwa", label: "Installable PWA", hint: "Mobile app feel — add to home screen, offline" },
+  { key: "offline", label: "Offline support", hint: "Works without network, syncs on reconnect" },
+  { key: "voice", label: "Voice / microphone", hint: "Record audio + speech-to-text" },
+  { key: "camera", label: "Camera", hint: "Photo / video capture" },
+  { key: "geolocation", label: "Geolocation", hint: "Location access" },
+  { key: "integration_api", label: "Public API / webhooks", hint: "API keys + webhooks + OpenAPI for integrations" },
+];
+
+function CapabilitiesPanel({
+  archId, initial, onSaved,
+}: {
+  archId: string;
+  initial: Record<string, boolean> | null | undefined;
+  onSaved: (c: Record<string, boolean>) => void;
+}) {
+  const [open, setOpen] = useState(Boolean(initial && Object.keys(initial).length));
+  const [caps, setCaps] = useState<Record<string, boolean>>(initial ?? {});
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+  const count = Object.values(caps).filter(Boolean).length;
+
+  async function save() {
+    setSaving(true); setMsg("");
+    try {
+      await api.setCapabilities(archId, caps);
+      onSaved(caps);
+      setMsg("Saved — applied on next Generate/Reassess.");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Save failed");
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div className="rounded-xl border border-gray-800 bg-gray-900/60">
+      <button type="button" onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-4 py-3 text-left">
+        <span className="flex items-center gap-2 text-sm font-medium text-gray-200">
+          <i className="ti ti-puzzle text-base text-teal-400" aria-hidden />
+          Capabilities
+          <span className="text-xs text-gray-500">{count ? `${count} enabled — mobile/voice/integration` : "optional — PWA, voice, camera, public API…"}</span>
+        </span>
+        <i className={`ti ${open ? "ti-chevron-down" : "ti-chevron-right"} text-gray-500`} aria-hidden />
+      </button>
+      {open ? (
+        <div className="border-t border-gray-800 p-4">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {CAPABILITY_OPTIONS.map((c) => (
+              <label key={c.key} className="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-800 bg-gray-950/50 p-2.5 hover:border-gray-600">
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={!!caps[c.key]}
+                  onChange={(e) => setCaps((p) => ({ ...p, [c.key]: e.target.checked }))}
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm text-gray-200">{c.label}</span>
+                  <span className="block text-[11px] text-gray-500">{c.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <Button size="sm" disabled={saving} onClick={() => void save()}>
+              {saving ? "Saving…" : "Save capabilities"}
+            </Button>
+            {msg ? <span className="text-xs text-gray-400">{msg}</span> : null}
+          </div>
+          <p className="mt-2 text-[11px] text-gray-600">
+            Off by default — a standard web app. Enable any of these to extend the build (e.g. installable
+            mobile PWA, voice input, or an integration API). Set before <strong>Generate</strong>.
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ArchitectureDetailPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
@@ -198,6 +359,7 @@ export default function ArchitectureDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfMessage, setPdfMessage] = useState("");
+  const [regeneratingDiagram, setRegeneratingDiagram] = useState<string | null>(null);
   const [toast, setToast] = useState<{
     message: string;
     type: "success" | "error";
@@ -228,10 +390,12 @@ export default function ArchitectureDetailPage() {
     onComplete: ({ elapsedSeconds }) => {
       void refresh();
       clearTaskFromUrl();
+      setRegeneratingDiagram(null);
       showToast(`Generation complete (${elapsedSeconds}s)`);
     },
     onFailed: () => {
       clearTaskFromUrl();
+      setRegeneratingDiagram(null);
       showToast("Generation failed.", "error");
     },
   });
@@ -487,6 +651,27 @@ export default function ArchitectureDetailPage() {
     }
   }
 
+  async function handleRegenerateDiagram(diagramName: string) {
+    try {
+      clearTaskFromUrl();
+      setRegeneratingDiagram(diagramName);
+      const result = await api.regenerateArchitectureDiagram(
+        id,
+        activeTab,
+        diagramName,
+        regenModel,
+      );
+      generationStarted.current.add(result.task_id);
+      const label = diagramName.replace(/_/g, " ");
+      aiJob.startJob(result.task_id, `Regenerating ${label} diagram`);
+      showToast(`Regenerating ${label} diagram…`);
+      await refresh();
+    } catch (err) {
+      setRegeneratingDiagram(null);
+      showToast(err instanceof Error ? err.message : "Diagram regenerate failed", "error");
+    }
+  }
+
   async function handleDeleteDoc(docKey: DocKey) {
     if (!window.confirm("Delete this document section? Content will be cleared.")) return;
     try {
@@ -704,11 +889,24 @@ export default function ArchitectureDetailPage() {
           <p className="text-sm text-blue-300">{pdfMessage}</p>
         ) : null}
 
-        {arch.last_error ? (
+        {/* Suite-level error — hidden once everything is generated and idle, so a
+            stale non-critical failure (e.g. one diagram) never blocks a finished suite. */}
+        {arch.last_error && !(allDocsComplete && !isGenerating) ? (
           <p className="rounded border border-red-800 bg-red-950/40 p-3 text-sm text-red-300">
             {arch.last_error}
           </p>
         ) : null}
+
+        <NfrProfilePanel
+          archId={id}
+          initial={arch.nfr_profile as Record<string, string> | null | undefined}
+          onSaved={(p) => setArch((prev) => (prev ? ({ ...prev, nfr_profile: p } as Architecture) : prev))}
+        />
+        <CapabilitiesPanel
+          archId={id}
+          initial={arch.capabilities as Record<string, boolean> | null | undefined}
+          onSaved={(c) => setArch((prev) => (prev ? ({ ...prev, capabilities: c } as Architecture) : prev))}
+        />
 
         {arch.consistency_report && (arch.consistency_report.overall != null || arch.consistency_report.issues?.length) ? (
           <div className="rounded-xl border border-gray-800 bg-gray-900/60 p-4">
@@ -1025,7 +1223,12 @@ export default function ArchitectureDetailPage() {
           </div>
 
           {activeDoc ? (
-            <ArchitectureDocView docKey={activeTab} doc={activeDoc} />
+            <ArchitectureDocView
+              docKey={activeTab}
+              doc={activeDoc}
+              onRegenerateDiagram={(name) => void handleRegenerateDiagram(name)}
+              regeneratingDiagram={regeneratingDiagram}
+            />
           ) : activeStatus === "generating" ? (
             <div className="space-y-3 py-8 text-center">
               <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />

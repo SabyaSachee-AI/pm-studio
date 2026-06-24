@@ -169,3 +169,5 @@ export const PRD_PRINT_STYLES = `
     display: none;
   }
 `;
+
+export const FORMAL_PRINT_STYLES = PRD_PRINT_STYLES;

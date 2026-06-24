@@ -26,6 +26,7 @@ celery_app = Celery(
         "app.workers.module_tasks",
         "app.workers.architecture_tasks",
         "app.workers.orchestration_tasks",
+        "app.workers.build_tasks",
     ],
 )
 
@@ -35,6 +36,12 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    # Long-running code builds go to a dedicated queue so they never block PRD/SRS/
+    # architecture jobs. Run a second worker for it:
+    #   celery -A app.core.celery_app worker -Q build --pool=solo -n build@%h
+    # The default worker still serves everything else (the "celery" queue).
+    task_routes={"build.*": {"queue": "build"}},
+    task_default_queue="celery",
 )
 
 celery_app.autodiscover_tasks(["app.workers"])

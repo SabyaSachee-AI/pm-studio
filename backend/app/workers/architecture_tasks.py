@@ -20,6 +20,7 @@ from app.services.ai.architecture_service import (
     consolidate_architecture_suite,
     edit_architecture_suite_ai,
     generate_full_architecture,
+    run_single_architecture_diagram,
     run_single_architecture_doc,
 )
 from app.services.ai.model_override import clear_model_override, set_model_override
@@ -262,6 +263,39 @@ def regenerate_architecture_doc_task(
         model_provider=model_provider,
         model_id=model_id,
     )
+
+
+@celery_app.task(bind=True, name="architecture.regenerate_diagram")
+def regenerate_architecture_diagram_task(
+    self,
+    architecture_id: str,
+    doc_key: str,
+    diagram_name: str,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    """Regenerate a single AI diagram within one architecture document."""
+    set_model_override(model_provider, model_id)
+    db = SyncSessionLocal()
+    try:
+        valid_keys = {k for k, _ in ARCH_DOC_KEYS}
+        if doc_key not in valid_keys:
+            return {"error": f"Invalid doc_key: {doc_key}", "diagram_name": diagram_name}
+
+        return _run_async(
+            run_single_architecture_diagram(
+                UUID(architecture_id),
+                doc_key,
+                diagram_name,
+                db,
+            )
+        )
+    except Exception as exc:
+        logger.exception("Architecture diagram regeneration failed")
+        return {"error": str(exc)[:500], "diagram_name": diagram_name}
+    finally:
+        db.close()
+        clear_model_override()
 
 
 def _run_single_doc(

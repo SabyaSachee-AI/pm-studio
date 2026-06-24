@@ -111,6 +111,16 @@ class Settings(BaseSettings):
         default=None,
         description="GitHub Models token — 150 RPD free open weights (optional).",
     )
+    github_repo_token: str | None = Field(
+        default=None,
+        description="GitHub fine-grained PAT for pushing generated code repos "
+        "(scopes: repo create + contents + workflow). Used by the Build factory.",
+    )
+    github_owner: str | None = Field(
+        default=None,
+        description="GitHub username/org that owns generated repos (defaults to "
+        "the token's authenticated user).",
+    )
     environment: str = Field(
         default="development",
         description="Runtime environment name (e.g. development, staging, production).",

@@ -688,7 +688,137 @@ async def chunked_modules(
             if mod.name not in established_modules:
                 established_modules.append(mod.name)
 
+    # ── Completeness pass (full generation only) ─────────────────────────────
+    # The FR batches cover functional behaviour. This final pass guarantees the
+    # NON-functional + architecture-entity work is also turned into tasks, so the
+    # downstream Build (tasks → code) produces a COMPLETE project — not just the
+    # happy-path features. Skipped in fill-gaps mode (which is FR-targeted).
+    if not target_frs:
+        existing_titles = [t.title for m in _merge_modules(parts).modules for t in m.tasks]
+        completeness = await _completeness_batch(
+            project_name=project_name,
+            arch_content=arch_content,
+            srs_content=srs_content,
+            established_modules=established_modules,
+            existing_titles=existing_titles,
+            system=system,
+            org_id=org_id,
+            db=db,
+        )
+        if completeness:
+            parts.append(completeness)
+
     return _merge_modules(parts)
+
+
+def _entity_inventory(arch_content: dict[str, Any] | None) -> str:
+    """All API endpoints + DB tables + pages — so the completeness pass can ensure
+    every concrete architecture unit has an implementing task."""
+    if not arch_content:
+        return ""
+    lines: list[str] = []
+    eps = (arch_content.get("doc_api") or {}).get("endpoints") or []
+    if eps:
+        lines.append("API endpoints (each needs a task):")
+        for e in eps:
+            lines.append(f"  {e.get('method', '')} {e.get('full_path') or e.get('path', '')} [{e.get('linked_fr', '')}]")
+    tables = (arch_content.get("doc_database") or {}).get("tables") or []
+    if tables:
+        lines.append("DB tables (each needs a model/migration task):")
+        for t in tables:
+            lines.append(f"  {t.get('name', '')}")
+    pages = (arch_content.get("doc_frontend") or {}).get("pages") or []
+    if pages:
+        lines.append("Frontend pages (each needs a task):")
+        for p in pages:
+            lines.append(f"  {p.get('path', '')}")
+    return "\n".join(lines)[:4000]
+
+
+def _nonfunctional_context(arch_content: dict[str, Any] | None, srs_content: dict[str, Any]) -> str:
+    """Security + reliability + NFR signals that must become real tasks."""
+    out: list[str] = []
+    nfrs = srs_content.get("non_functional_requirements") or srs_content.get("nonfunctional_requirements") or []
+    if nfrs:
+        out.append("SRS non-functional requirements:")
+        for n in nfrs[:12]:
+            if isinstance(n, dict):
+                out.append(f"  - {n.get('category', '')}: {(n.get('description') or '')[:140]}")
+            else:
+                out.append(f"  - {str(n)[:140]}")
+    sec = arch_content.get("doc_security") if arch_content else None
+    if sec:
+        owasp = sec.get("owasp_checklist") or []
+        if owasp:
+            out.append("Security (OWASP) controls to implement:")
+            for c in owasp[:10]:
+                out.append(f"  - {c.get('item') or c.get('control') or c if isinstance(c, dict) else c}")
+    rel = ((arch_content or {}).get("doc_system_arch") or {}).get("reliability") or {}
+    if rel:
+        out.append(f"Reliability targets: {json.dumps(rel, separators=(',', ':'), default=str)[:600]}")
+    return "\n".join(out)[:3500]
+
+
+async def _completeness_batch(
+    *,
+    project_name: str,
+    arch_content: dict[str, Any] | None,
+    srs_content: dict[str, Any],
+    established_modules: list[str],
+    existing_titles: list[str],
+    system: str,
+    org_id: UUID | None,
+    db: AsyncSession | None,
+) -> ModuleListSchema | None:
+    """Generate the cross-cutting / non-functional / uncovered-entity tasks."""
+    inventory = _entity_inventory(arch_content)
+    nfr = _nonfunctional_context(arch_content, srs_content)
+    caps = (arch_content or {}).get("_capabilities") or {}
+    cap_hints = {
+        "pwa": "PWA setup (manifest, service worker, icons, installability, mobile-first).",
+        "offline": "Offline support (cache shell + data, sync on reconnect).",
+        "voice": "Voice capture + speech-to-text (mic permission, MediaRecorder/Web Speech API, transcription endpoint).",
+        "camera": "Camera capture with permissions.",
+        "geolocation": "Geolocation with permissions.",
+        "integration_api": "Public API: API-key auth, webhook dispatch, OpenAPI/Swagger docs.",
+    }
+    cap_block = "\n".join(f"  - {cap_hints[k]}" for k in cap_hints if caps.get(k))
+    if not inventory and not nfr and not cap_block:
+        return None
+
+    titles_block = "\n".join(f"  - {t}" for t in existing_titles[:120])
+    module_block = "\n".join(f"  - {m}" for m in established_modules)
+    prompt = (
+        f"[COMPLETENESS PASS] Project: {project_name}\n\n"
+        "Functional tasks already exist (below). Now add the tasks needed for a "
+        "COMPLETE, production-ready project that the FR tasks did NOT cover. Do NOT "
+        "duplicate any existing task.\n\n"
+        f"EXISTING MODULES:\n{module_block or 'none'}\n\n"
+        f"EXISTING TASK TITLES (do not repeat):\n{titles_block or 'none'}\n\n"
+        f"ARCHITECTURE ENTITIES — ensure EACH has an implementing task:\n{inventory or 'none'}\n\n"
+        f"NON-FUNCTIONAL WORK — turn these into concrete tasks:\n{nfr or 'none'}\n\n"
+        f"REQUIRED CAPABILITIES — add tasks to implement these:\n{cap_block or 'none'}\n\n"
+        "Generate tasks for any uncovered endpoint/table/page PLUS cross-cutting "
+        "work: security hardening, input validation, auth, error handling, logging/"
+        "observability, caching/performance, backups/DR & health checks, and infra/"
+        "deployment config. Reuse established module names where they fit. Each task: "
+        "specific title, description (who does what, in which file), priority, "
+        "effort_hours (1–16); set linked_fr only if it maps to a specific FR."
+    )
+    try:
+        return await ai_call(
+            prompt=prompt,
+            response_model=ModuleListSchema,
+            system=system,
+            max_tokens=8000,
+            task_type="module_extract",
+            screen="tasks",
+            org_id=org_id,
+            db=db,
+        )
+    except Exception:  # noqa: BLE001 — completeness is additive; never fail the run
+        logger.warning("Completeness pass failed; continuing with FR tasks only")
+        return None
 
 
 def _build_compact_arch_context(arch_content: dict[str, Any] | None) -> str:

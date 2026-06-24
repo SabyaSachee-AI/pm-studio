@@ -475,8 +475,10 @@ def validate_suite(
     docs: dict[str, dict[str, Any] | None],
     srs_content: dict[str, Any],
     suite_canon: dict[str, Any] | None = None,
+    nfr_profile: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Score suite on 8 criteria (0-10 each)."""
+    """Score suite on 8 base criteria (0-10 each), plus 2 NFR criteria when a
+    non-functional profile is set (kept optional so existing scores never change)."""
     issues: list[str] = []
     canon = suite_canon or build_suite_canon_from_srs(
         srs_content, srs_content.get("project_name", "Project")
@@ -621,6 +623,32 @@ def validate_suite(
         "mvp_scope": min(10, max(0, mvp_score)),
         "dev_ready": min(10, max(0, ready_score)),
     }
+
+    # 9-10. NFR criteria — only when a non-functional profile is set, so suites
+    # without a profile keep their original 8-criterion score unchanged.
+    if nfr_profile:
+        rel = (sys_doc.get("reliability") or {}) if isinstance(sys_doc, dict) else {}
+        # NFR coverage: does the reliability layer address the key dimensions?
+        keys = ("availability_target", "rto", "rpo", "failure_modes", "redundancy",
+                "scaling_strategy")
+        present = sum(1 for k in keys if rel.get(k))
+        nfr_cov = round(10 * present / len(keys)) if rel else 0
+        if nfr_cov < 10:
+            issues.append("Reliability layer missing NFR details (availability/RTO/RPO/failure modes/redundancy/scaling)")
+        # Right-sizing: high availability target demands redundancy; small scale
+        # shouldn't use microservices.
+        right = 10
+        avail = str(nfr_profile.get("availability") or "").replace("%", "")
+        if avail in ("99.99", "99.999") and not rel.get("redundancy"):
+            right -= 4
+            issues.append("High availability target but no redundancy/failover defined")
+        scale = str(nfr_profile.get("scale") or "").lower()
+        if ("small" in scale or "mvp" in scale or "low" in scale) and "microservice" in pattern:
+            right -= 4
+            issues.append("Microservices for a small/MVP scale — over-engineered")
+        scores["nfr_coverage"] = min(10, max(0, nfr_cov))
+        scores["right_sizing"] = min(10, max(0, right))
+
     overall = round(sum(scores.values()) / len(scores), 1)
     return {
         "scores": scores,

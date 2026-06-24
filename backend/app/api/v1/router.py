@@ -8,6 +8,7 @@ from app.api.v1.dashboard.router import router as dashboard_router
 from app.api.v1.ai_models.router import router as ai_models_router
 from app.api.v1.architecture.router import router as architecture_router
 from app.api.v1.auth.router import router as auth_router
+from app.api.v1.build.router import router as build_router
 from app.api.v1.clients.router import router as clients_router
 from app.api.v1.decisions.router import router as decisions_router
 from app.api.v1.documents.router import router as documents_router
@@ -34,6 +35,7 @@ api_router.include_router(prds_router)
 api_router.include_router(requirements_router)
 api_router.include_router(srs_router)
 api_router.include_router(architecture_router)
+api_router.include_router(build_router)
 api_router.include_router(specs_router)
 api_router.include_router(tasks_domain_router)
 api_router.include_router(jobs_router)

@@ -26,6 +26,12 @@ import {
   type SRS,
   type UserResponse,
 } from "@/lib/api";
+import { SrsFormalDocument } from "@/components/features/srs/SrsFormalDocument";
+import {
+  FORMAL_PRINT_STYLES,
+  formatSrsDocumentDate,
+  srsDocumentStatusLabel,
+} from "@/lib/srsDocument";
 import {
   aiButtonClassName,
   aiButtonLabel,
@@ -646,13 +652,16 @@ export default function SrsDetailPage() {
       : `/portal/srs/${id}`;
 
   const confirmedBy = String(meta.confirmed_by_name ?? pmUser?.full_name ?? "PM");
-  const confirmedDate = meta.confirmed_at
-    ? new Date(String(meta.confirmed_at)).toLocaleDateString(undefined, {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      })
-    : new Date().toLocaleDateString();
+  const confirmedDate = formatSrsDocumentDate(
+    typeof meta.confirmed_at === "string" ? meta.confirmed_at : undefined,
+  );
+  const printStatusLabel = srsDocumentStatusLabel(srs?.status ?? "draft", meta);
+  const clientApproved =
+    srs?.status === "approved" || meta.client_approval_status === "approved";
+  const clientApprovedDate =
+    typeof meta.client_approved_at === "string"
+      ? formatSrsDocumentDate(meta.client_approved_at)
+      : undefined;
 
   const displayContent = content ? stripMeta(content) : null;
   const nfrByCategory = (stats.nfr_by_category as Record<string, number>) ?? {};
@@ -678,18 +687,11 @@ export default function SrsDetailPage() {
   return (
     <>
       <style>{`
-        @page { size: A4 landscape; margin: 1.5cm; }
-        @media print {
-          aside, header, nav, .no-print { display: none !important; }
-          main { padding: 0 !important; }
-          body { background: #fff !important; color: #000 !important; }
-          .print-only { display: block !important; }
-        }
-        .print-only { display: none; }
-        .progress-animate { animation: progress-pulse 1.5s ease-in-out infinite; }
+        ${FORMAL_PRINT_STYLES}
         @keyframes progress-pulse {
           0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; }
         }
+        .progress-animate { animation: progress-pulse 1.5s ease-in-out infinite; }
       `}</style>
 
       <Toast
@@ -1210,64 +1212,25 @@ export default function SrsDetailPage() {
         </div>
       </div>
 
-      {/* PRINT / PREVIEW DOCUMENT — formal A4 layout matching PRD style */}
-      {displayContent ? (
-        <div className="print-only prd-print-sheet mt-8">
-          <div className="mx-auto max-w-3xl bg-white p-10 text-black font-serif text-sm">
-            <div className="mb-8 text-center">
-              <h1 className="text-2xl font-bold tracking-wide uppercase">
-                Software Requirements Specification
-              </h1>
-              <p className="mt-1 text-xs uppercase tracking-widest text-gray-500">
-                IEEE 830 Compliant
-              </p>
-            </div>
-
-            <table className="w-full mb-8 border-collapse text-sm">
-              <tbody>
-                {[
-                  ["Project", project?.name ?? "—"],
-                  ["Client", clientName],
-                  ["Version", `v${srs.version}`],
-                  ["Date", confirmedDate],
-                  ["Prepared by", confirmedBy],
-                  ["Source PRD", srs.source_prd_display_name ?? "—"],
-                  ["Status", isFinalized ? "FINALIZED" : "DRAFT"],
-                  ["Scope", `${String(stats.fr_count ?? 0)} FRs · ${String(stats.nfr_count ?? 0)} NFRs${qualityScore != null ? ` · Quality ${qualityScore}/100` : ""}`],
-                ].map(([label, value]) => (
-                  <tr key={label} className="border-b border-gray-200">
-                    <td className="py-2 pr-4 font-semibold w-36 text-gray-700">{label}</td>
-                    <td className="py-2">{value}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <hr className="my-6 border-gray-300" />
-            <SrsContentView content={displayContent} />
-
-            {traceability ? (
-              <>
-                <hr className="my-6 border-gray-300" />
-                <h2 className="font-bold text-base mb-3">Traceability Matrix</h2>
-                <TraceabilityMatrix traceability={traceability} />
-              </>
-            ) : null}
-
-            <hr className="my-8 border-gray-300" />
-            <div className="grid grid-cols-2 gap-8 text-xs text-gray-600">
-              <div>
-                <p className="font-semibold">Confirmed by</p>
-                <p className="mt-1">{confirmedBy}</p>
-                <p className="mt-4 border-t border-gray-400 pt-1">Signature</p>
-              </div>
-              <div>
-                <p className="font-semibold">Date</p>
-                <p className="mt-1">{confirmedDate}</p>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* PRINT DOCUMENT — A4 portrait (matches PRD) */}
+      {displayContent && srs ? (
+        <SrsFormalDocument
+          variant="print"
+          projectName={project?.name}
+          clientName={clientName}
+          version={srs.version}
+          statusLabel={printStatusLabel}
+          confirmedBy={confirmedBy}
+          confirmedDate={confirmedDate}
+          content={displayContent}
+          sourcePrdName={srs.source_prd_display_name ?? undefined}
+          frCount={Number(stats.fr_count ?? 0)}
+          nfrCount={Number(stats.nfr_count ?? 0)}
+          qualityScore={qualityScore}
+          traceability={traceability}
+          clientApproved={clientApproved}
+          clientApprovedDate={clientApprovedDate}
+        />
       ) : null}
     </>
   );

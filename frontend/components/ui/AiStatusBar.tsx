@@ -162,6 +162,11 @@ export function AiStatusBar({
             Try again
           </Button>
         ) : null}
+        {status === "failed" && onCancel ? (
+          <Button variant="outline" size="xs" onClick={onCancel}>
+            Dismiss
+          </Button>
+        ) : null}
       </div>
     </div>
   );

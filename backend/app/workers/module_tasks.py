@@ -47,6 +47,7 @@ def _build_arch_content(arch: Architecture) -> dict[str, Any]:
         "doc_frontend": arch.doc_frontend or {},
         "doc_security": arch.doc_security or {},
         "doc_uiux": arch.doc_uiux or {},
+        "_capabilities": getattr(arch, "capabilities", None) or {},
     }
 
 

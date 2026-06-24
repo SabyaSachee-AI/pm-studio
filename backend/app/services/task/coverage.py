@@ -81,3 +81,103 @@ def compute_coverage(
         "missing_frs": missing,
         "coverage_pct": round(covered_count / max(len(all_frs), 1) * 100),
     }
+
+
+# ── Multi-dimensional coverage: architecture entities + NFRs ─────────────────
+
+def _task_haystack(tasks: list[Any]) -> str:
+    """One lowercased blob of all task text + suggested file/endpoint/table."""
+    parts: list[str] = []
+    for t in tasks:
+        for attr in ("title", "description", "suggested_file", "suggested_endpoint",
+                     "suggested_table", "module_name"):
+            v = getattr(t, attr, None)
+            if v:
+                parts.append(str(v))
+    return " ".join(parts).lower()
+
+
+def _endpoint_key(ep: dict[str, Any]) -> str:
+    """A matchable token for an endpoint — its path minus base/params."""
+    path = str(ep.get("full_path") or ep.get("path") or "").lower()
+    segs = [s for s in path.split("/") if s and not s.startswith("{") and s not in ("api", "v1")]
+    return "/".join(segs[-2:]) if segs else path
+
+
+def _meter(total: int, covered: int, missing: list[str]) -> dict[str, Any]:
+    return {
+        "total": total,
+        "covered": covered,
+        "missing": missing[:20],
+        "pct": round(covered / max(total, 1) * 100) if total else 100,
+    }
+
+
+def compute_full_coverage(
+    srs_content: dict[str, Any] | None,
+    arch: Any,
+    tasks: list[Any],
+) -> dict[str, Any]:
+    """FR + API-endpoint + DB-table + NFR coverage — multi-dimensional gap view.
+
+    Coverage here is heuristic (token/keyword presence in task text) — meant as a
+    completeness signal, not a strict proof. arch is the Architecture row (or None).
+    """
+    hay = _task_haystack(tasks)
+    # Structured signals first: what tasks explicitly declare they build.
+    sug_endpoints = " ".join(str(getattr(t, "suggested_endpoint", "") or "") for t in tasks).lower()
+    sug_tables = {str(getattr(t, "suggested_table", "") or "").lower().strip() for t in tasks if getattr(t, "suggested_table", None)}
+    out: dict[str, Any] = {"fr": compute_coverage(srs_content, tasks)}
+
+    api_doc = (getattr(arch, "doc_api", None) or {}) if arch else {}
+    endpoints = api_doc.get("endpoints") or []
+    ep_missing: list[str] = []
+    ep_cov = 0
+    for ep in endpoints:
+        key = _endpoint_key(ep)
+        path = str(ep.get("full_path") or ep.get("path") or "").lower()
+        label = f"{ep.get('method', '')} {ep.get('full_path') or ep.get('path', '')}".strip()
+        # structured (suggested_endpoint) → then path/key text match
+        covered = (path and path in sug_endpoints) or (key and (key in sug_endpoints or key in hay))
+        if covered:
+            ep_cov += 1
+        else:
+            ep_missing.append(label or key)
+    out["endpoints"] = _meter(len(endpoints), ep_cov, ep_missing)
+
+    db_doc = (getattr(arch, "doc_database", None) or {}) if arch else {}
+    tables = db_doc.get("tables") or []
+    tbl_missing: list[str] = []
+    tbl_cov = 0
+    for t in tables:
+        name = str(t.get("name") or "").lower().strip()
+        covered = name and (name in sug_tables or name in hay or name.rstrip("s") in hay)
+        if covered:
+            tbl_cov += 1
+        elif name:
+            tbl_missing.append(name)
+    out["tables"] = _meter(len(tables), tbl_cov, tbl_missing)
+
+    nfrs = (srs_content or {}).get("non_functional_requirements") \
+        or (srs_content or {}).get("nonfunctional_requirements") or []
+    nfr_missing: list[str] = []
+    nfr_cov = 0
+    for n in nfrs:
+        cat = (n.get("category") if isinstance(n, dict) else str(n)) or ""
+        cat_l = str(cat).lower()
+        # a couple of synonyms per common NFR category
+        keys = [cat_l] + {
+            "security": ["auth", "encrypt", "owasp"],
+            "performance": ["cache", "latency", "optimi"],
+            "reliability": ["backup", "health", "retry", "failover"],
+            "scalability": ["scale", "load balanc"],
+            "usability": ["accessib", "ux"],
+            "maintainability": ["logging", "observability", "test"],
+        }.get(cat_l, [])
+        if any(k and k in hay for k in keys):
+            nfr_cov += 1
+        else:
+            nfr_missing.append(str(cat))
+    out["nfrs"] = _meter(len(nfrs), nfr_cov, nfr_missing)
+
+    return out

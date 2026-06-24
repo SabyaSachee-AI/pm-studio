@@ -48,19 +48,33 @@ async function renderChart(chart: string): Promise<string> {
   }
 }
 
-export function MermaidDiagram({ chart, id }: { chart: string; id: string }) {
+export type MermaidDiagramProps = {
+  chart: string;
+  id: string;
+  /** When true, show AI regenerate action on render failure */
+  regeneratable?: boolean;
+  regenerating?: boolean;
+  onRegenerate?: () => void;
+};
+
+export function MermaidDiagram({
+  chart,
+  id,
+  regeneratable = false,
+  regenerating = false,
+  onRegenerate,
+}: MermaidDiagramProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const [sanitized, setSanitized] = useState("");
-  // Track the last rendered chart to avoid duplicate renders
+  const [retryKey, setRetryKey] = useState(0);
   const lastChartRef = useRef("");
 
   useEffect(() => {
     if (!ref.current || !chart) return;
     const clean = sanitizeMermaid(chart);
     if (!clean) return;
-    // Skip if the same chart already rendered successfully
     if (clean === lastChartRef.current && !failed) return;
 
     setSanitized(clean);
@@ -70,7 +84,6 @@ export function MermaidDiagram({ chart, id }: { chart: string; id: string }) {
     let cancelled = false;
 
     async function tryRender() {
-      // First attempt: fully sanitized diagram
       try {
         const svg = await renderChart(clean);
         if (!cancelled && ref.current) {
@@ -85,7 +98,6 @@ export function MermaidDiagram({ chart, id }: { chart: string; id: string }) {
 
       if (cancelled) return;
 
-      // Second attempt: skeleton (strips labels that may contain invalid chars)
       const skeleton = stripToSkeleton(clean);
       if (skeleton && skeleton !== clean) {
         try {
@@ -110,20 +122,46 @@ export function MermaidDiagram({ chart, id }: { chart: string; id: string }) {
     return () => {
       cancelled = true;
     };
-  }, [chart, id, failed]);
+  }, [chart, id, failed, retryKey]);
 
   if (failed) {
     return (
       <div className="rounded-lg border border-amber-900/40 bg-amber-950/10 p-3 text-xs">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-amber-400">Diagram unavailable — regenerate doc to fix</span>
-          <button
-            type="button"
-            className="text-gray-400 underline hover:text-gray-200"
-            onClick={() => setShowSource((v) => !v)}
-          >
-            {showSource ? "Hide source" : "View source"}
-          </button>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-amber-400">
+            Diagram unavailable
+            {regeneratable ? " — regenerate with AI to fix" : " — retry render or regenerate document"}
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            {regeneratable && onRegenerate ? (
+              <button
+                type="button"
+                className="rounded border border-blue-800 bg-blue-950/40 px-2 py-1 text-blue-200 hover:bg-blue-900/50 disabled:opacity-50"
+                disabled={regenerating}
+                onClick={() => onRegenerate()}
+              >
+                {regenerating ? "Regenerating…" : "Regenerate diagram"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:bg-gray-800"
+                onClick={() => {
+                  setFailed(false);
+                  setRetryKey((k) => k + 1);
+                }}
+              >
+                Retry render
+              </button>
+            )}
+            <button
+              type="button"
+              className="text-gray-400 underline hover:text-gray-200"
+              onClick={() => setShowSource((v) => !v)}
+            >
+              {showSource ? "Hide source" : "View source"}
+            </button>
+          </div>
         </div>
         {showSource ? (
           <pre className="mt-2 max-h-64 overflow-x-auto overflow-y-auto whitespace-pre-wrap rounded bg-gray-950 p-2 text-gray-400">

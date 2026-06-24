@@ -34,6 +34,33 @@ class ProviderStatus(BaseModel):
     default_tier: str = "free"
 
 
+class GithubConfigUpdate(BaseModel):
+    token: str | None = None
+    owner: str | None = None
+
+
+class GithubConfigStatus(BaseModel):
+    configured: bool = False
+    masked_token: str | None = None
+    owner: str | None = None
+    source: str = "none"  # "db" | "env" | "none"
+
+
+class VpsConfigUpdate(BaseModel):
+    host: str | None = None
+    user: str | None = None
+    ssh_key: str | None = None
+    path: str | None = None
+
+
+class VpsConfigStatus(BaseModel):
+    configured: bool = False
+    host: str | None = None
+    user: str | None = None
+    path: str | None = None
+    has_key: bool = False
+
+
 class ModelCatalogEntry(BaseModel):
     provider: str
     model: str

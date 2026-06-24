@@ -1,14 +1,48 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { MermaidDiagram } from "@/components/ui/MermaidDiagram";
 import {
   buildAuthFlowDiagram,
   buildComponentTreeDiagram,
+  buildDataFlowDiagram,
   buildErDiagram,
   buildRbacDiagram,
+  buildRequestFlowDiagram,
   buildRoutingDiagram,
   buildSystemOverviewDiagram,
+  isAiRegeneratableDiagram,
+  missingAiDiagramSlots,
 } from "@/lib/architectureDiagrams";
+
+export type ArchitectureDocViewProps = {
+  docKey: string;
+  doc: Record<string, unknown> | null;
+  onRegenerateDiagram?: (diagramName: string) => void;
+  regeneratingDiagram?: string | null;
+};
+
+function formatDiagramTitle(name: string): string {
+  return name.replace(/_/g, " ");
+}
+
+function diagramRegenProps(
+  docKey: string,
+  doc: Record<string, unknown>,
+  diagramName: string,
+  onRegenerateDiagram?: (diagramName: string) => void,
+  regeneratingDiagram?: string | null,
+) {
+  const regeneratable =
+    isAiRegeneratableDiagram(docKey, diagramName, doc) && Boolean(onRegenerateDiagram);
+  return {
+    regeneratable,
+    regenerating: regeneratingDiagram === diagramName,
+    onRegenerate: regeneratable
+      ? () => onRegenerateDiagram?.(diagramName)
+      : undefined,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Diagram panel — tries programmatic first, falls back to AI-stored string
@@ -16,21 +50,73 @@ import {
 
 function DiagramPanel({
   title,
+  diagramName,
+  docKey,
+  doc,
   generated,
   stored,
   id,
+  onRegenerateDiagram,
+  regeneratingDiagram,
 }: {
   title: string;
+  diagramName: string;
+  docKey: string;
+  doc: Record<string, unknown>;
   generated?: string;
   stored?: string;
   id: string;
+  onRegenerateDiagram?: (diagramName: string) => void;
+  regeneratingDiagram?: string | null;
 }) {
   const chart = generated?.trim() ? generated : (stored ?? "");
   if (!chart) return null;
+  const regen = diagramRegenProps(
+    docKey,
+    doc,
+    diagramName,
+    onRegenerateDiagram,
+    regeneratingDiagram,
+  );
   return (
     <div className="print:break-inside-avoid">
       <h4 className="mb-2 text-sm font-medium text-gray-300">{title}</h4>
-      <MermaidDiagram chart={chart} id={id} />
+      <MermaidDiagram chart={chart} id={id} {...regen} />
+    </div>
+  );
+}
+
+function MissingDiagramPanel({
+  name,
+  docKey,
+  doc,
+  onRegenerateDiagram,
+  regeneratingDiagram,
+}: {
+  name: string;
+  docKey: string;
+  doc: Record<string, unknown>;
+  onRegenerateDiagram?: (diagramName: string) => void;
+  regeneratingDiagram?: string | null;
+}) {
+  if (!isAiRegeneratableDiagram(docKey, name, doc)) return null;
+  const regenerating = regeneratingDiagram === name;
+  return (
+    <div className="print:break-inside-avoid rounded-lg border border-dashed border-gray-700 bg-gray-900/40 p-4">
+      <h4 className="mb-2 text-sm font-medium capitalize text-gray-300">
+        {formatDiagramTitle(name)}
+      </h4>
+      <p className="text-xs text-gray-500">Diagram not generated yet.</p>
+      {onRegenerateDiagram ? (
+        <button
+          type="button"
+          className="mt-3 rounded border border-blue-800 bg-blue-950/40 px-3 py-1.5 text-xs text-blue-200 hover:bg-blue-900/50 disabled:opacity-50"
+          disabled={regenerating}
+          onClick={() => onRegenerateDiagram(name)}
+        >
+          {regenerating ? "Generating…" : "Generate diagram"}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -39,10 +125,18 @@ function StoredDiagrams({
   diagrams,
   exclude,
   prefix,
+  docKey,
+  doc,
+  onRegenerateDiagram,
+  regeneratingDiagram,
 }: {
   diagrams?: Record<string, string>;
   exclude?: string[];
   prefix: string;
+  docKey: string;
+  doc: Record<string, unknown>;
+  onRegenerateDiagram?: (diagramName: string) => void;
+  regeneratingDiagram?: string | null;
 }) {
   if (!diagrams) return null;
   const entries = Object.entries(diagrams).filter(
@@ -51,21 +145,132 @@ function StoredDiagrams({
   if (!entries.length) return null;
   return (
     <>
-      {entries.map(([name, chart]) => (
-        <div key={name} className="print:break-inside-avoid">
-          <h4 className="mb-2 text-sm font-medium text-gray-300">
-            {name.replace(/_/g, " ")}
-          </h4>
-          <MermaidDiagram chart={chart} id={`${prefix}-${name}`} />
-        </div>
-      ))}
+      {entries.map(([name, chart]) => {
+        if (!chart?.trim()) {
+          return (
+            <MissingDiagramPanel
+              key={name}
+              name={name}
+              docKey={docKey}
+              doc={doc}
+              onRegenerateDiagram={onRegenerateDiagram}
+              regeneratingDiagram={regeneratingDiagram}
+            />
+          );
+        }
+        const regen = diagramRegenProps(
+          docKey,
+          doc,
+          name,
+          onRegenerateDiagram,
+          regeneratingDiagram,
+        );
+        return (
+          <div key={name} className="print:break-inside-avoid">
+            <h4 className="mb-2 text-sm font-medium capitalize text-gray-300">
+              {formatDiagramTitle(name)}
+            </h4>
+            <MermaidDiagram chart={chart} id={`${prefix}-${name}`} {...regen} />
+          </div>
+        );
+      })}
     </>
+  );
+}
+
+function DiagramSection({
+  docKey,
+  doc,
+  onRegenerateDiagram,
+  regeneratingDiagram,
+  children,
+}: {
+  docKey: string;
+  doc: Record<string, unknown>;
+  onRegenerateDiagram?: (diagramName: string) => void;
+  regeneratingDiagram?: string | null;
+  children: ReactNode;
+}) {
+  const missing = missingAiDiagramSlots(docKey, doc);
+  return (
+    <div className="space-y-4">
+      {children}
+      {missing.map((name) => (
+        <MissingDiagramPanel
+          key={name}
+          name={name}
+          docKey={docKey}
+          doc={doc}
+          onRegenerateDiagram={onRegenerateDiagram}
+          regeneratingDiagram={regeneratingDiagram}
+        />
+      ))}
+    </div>
   );
 }
 
 // ---------------------------------------------------------------------------
 // Method badge
 // ---------------------------------------------------------------------------
+
+function ReliabilitySection({ reliability }: { reliability?: Record<string, unknown> }) {
+  if (!reliability || Object.keys(reliability).length === 0) return null;
+  const r = reliability;
+  const fm = Array.isArray(r.failure_modes) ? (r.failure_modes as Array<Record<string, unknown>>) : [];
+  const allRows: [string, string][] = [
+    ["Availability", String(r.availability_target ?? "")],
+    ["Downtime budget", String(r.downtime_budget ?? "")],
+    ["RTO", String(r.rto ?? "")],
+    ["RPO", String(r.rpo ?? "")],
+    ["Backup & DR", String(r.backup_and_dr ?? "")],
+    ["Redundancy", String(r.redundancy ?? "")],
+    ["Scaling", String(r.scaling_strategy ?? "")],
+    ["Capacity", String(r.capacity_assumptions ?? "")],
+    ["Performance", String(r.performance_targets ?? "")],
+  ];
+  const simple = allRows.filter(([, v]) => v && v !== "undefined" && v !== "[object Object]");
+
+  return (
+    <section>
+      <h3 className="flex items-center gap-2 font-medium text-white">
+        <i className="ti ti-shield-check text-emerald-400" aria-hidden /> Reliability &amp; NFRs
+      </h3>
+      {simple.length > 0 ? (
+        <table className="mt-2 w-full text-xs">
+          <tbody>
+            {simple.map(([k, v]) => (
+              <tr key={k} className="border-b border-gray-800/60">
+                <td className="py-1.5 pr-3 align-top font-medium text-gray-400 whitespace-nowrap">{k}</td>
+                <td className="py-1.5 text-gray-300">{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {fm.length > 0 ? (
+        <div className="mt-3">
+          <p className="mb-1 text-xs font-medium text-gray-400">Failure modes</p>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-700 text-left text-gray-500">
+                <th className="py-1 pr-3">Component</th><th className="pr-3">Failure</th><th>Mitigation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fm.map((m, i) => (
+                <tr key={i} className="border-b border-gray-800/60">
+                  <td className="py-1 pr-3 text-gray-300">{String(m.component ?? "")}</td>
+                  <td className="pr-3 text-gray-400">{String(m.failure ?? "")}</td>
+                  <td className="text-gray-400">{String(m.mitigation ?? "")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 function methodBadgeClass(method: string): string {
   const m = method.toUpperCase();
@@ -83,10 +288,9 @@ function methodBadgeClass(method: string): string {
 export function ArchitectureDocView({
   docKey,
   doc,
-}: {
-  docKey: string;
-  doc: Record<string, unknown> | null;
-}) {
+  onRegenerateDiagram,
+  regeneratingDiagram,
+}: ArchitectureDocViewProps) {
   if (!doc) {
     return <p className="text-gray-500">Document not generated yet.</p>;
   }
@@ -98,6 +302,7 @@ export function ArchitectureDocView({
     const stack = (doc.tech_stack as Record<string, Record<string, string>>) ?? {};
     const components = (doc.components as Array<Record<string, unknown>>) ?? [];
     const systemOverview = buildSystemOverviewDiagram(components);
+    const dataFlow = buildDataFlowDiagram((doc.data_flow as string[]) ?? []);
     return (
       <div className="space-y-6 text-sm text-gray-300">
         <p>{String(doc.overview ?? "")}</p>
@@ -138,10 +343,47 @@ export function ArchitectureDocView({
             </ul>
           </section>
         ) : null}
-        <div className="space-y-4">
-          <DiagramPanel title="System overview" generated={systemOverview} stored={diagrams?.system_overview} id="sys-system_overview" />
-          <StoredDiagrams diagrams={diagrams} exclude={["system_overview"]} prefix="sys" />
-        </div>
+        <ReliabilitySection reliability={doc.reliability as Record<string, unknown> | undefined} />
+        <DiagramSection
+          docKey={docKey}
+          doc={doc}
+          onRegenerateDiagram={onRegenerateDiagram}
+          regeneratingDiagram={regeneratingDiagram}
+        >
+          <DiagramPanel
+            title="System overview"
+            diagramName="system_overview"
+            docKey={docKey}
+            doc={doc}
+            generated={systemOverview}
+            stored={diagrams?.system_overview}
+            id="sys-system_overview"
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+          {dataFlow ? (
+            <DiagramPanel
+              title="Data flow"
+              diagramName="data_flow"
+              docKey={docKey}
+              doc={doc}
+              generated={dataFlow}
+              stored={diagrams?.data_flow}
+              id="sys-data_flow"
+              onRegenerateDiagram={onRegenerateDiagram}
+              regeneratingDiagram={regeneratingDiagram}
+            />
+          ) : null}
+          <StoredDiagrams
+            diagrams={diagrams}
+            exclude={["system_overview", "data_flow"]}
+            prefix="sys"
+            docKey={docKey}
+            doc={doc}
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+        </DiagramSection>
       </div>
     );
   }
@@ -211,10 +453,33 @@ export function ArchitectureDocView({
             </section>
           );
         })}
-        <div className="space-y-4">
-          <DiagramPanel title="Entity relationship diagram" generated={erd} stored={diagrams?.erd} id="db-erd" />
-          <StoredDiagrams diagrams={diagrams} exclude={["erd"]} prefix="db" />
-        </div>
+        <DiagramSection
+          docKey={docKey}
+          doc={doc}
+          onRegenerateDiagram={onRegenerateDiagram}
+          regeneratingDiagram={regeneratingDiagram}
+        >
+          <DiagramPanel
+            title="Entity relationship diagram"
+            diagramName="erd"
+            docKey={docKey}
+            doc={doc}
+            generated={erd}
+            stored={diagrams?.erd}
+            id="db-erd"
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+          <StoredDiagrams
+            diagrams={diagrams}
+            exclude={["erd"]}
+            prefix="db"
+            docKey={docKey}
+            doc={doc}
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+        </DiagramSection>
       </div>
     );
   }
@@ -223,6 +488,7 @@ export function ArchitectureDocView({
   if (docKey === "doc_api") {
     const endpoints = (doc.endpoints as Array<Record<string, unknown>>) ?? [];
     const authFlow = buildAuthFlowDiagram();
+    const requestFlow = buildRequestFlowDiagram();
     return (
       <div className="space-y-6 text-sm text-gray-300">
         <p>{String(doc.overview ?? "")}</p>
@@ -247,10 +513,44 @@ export function ArchitectureDocView({
             </div>
           ))}
         </div>
-        <div className="space-y-4">
-          <DiagramPanel title="Auth flow" generated={authFlow} stored={diagrams?.auth_flow} id="api-auth_flow" />
-          <StoredDiagrams diagrams={diagrams} exclude={["auth_flow"]} prefix="api" />
-        </div>
+        <DiagramSection
+          docKey={docKey}
+          doc={doc}
+          onRegenerateDiagram={onRegenerateDiagram}
+          regeneratingDiagram={regeneratingDiagram}
+        >
+          <DiagramPanel
+            title="Auth flow"
+            diagramName="auth_flow"
+            docKey={docKey}
+            doc={doc}
+            generated={authFlow}
+            stored={diagrams?.auth_flow}
+            id="api-auth_flow"
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+          <DiagramPanel
+            title="Request flow"
+            diagramName="request_flow"
+            docKey={docKey}
+            doc={doc}
+            generated={requestFlow}
+            stored={diagrams?.request_flow}
+            id="api-request_flow"
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+          <StoredDiagrams
+            diagrams={diagrams}
+            exclude={["auth_flow", "request_flow"]}
+            prefix="api"
+            docKey={docKey}
+            doc={doc}
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+        </DiagramSection>
       </div>
     );
   }
@@ -276,11 +576,42 @@ export function ArchitectureDocView({
             </li>
           ))}
         </ul>
-        <div className="space-y-4">
-          <DiagramPanel title="Routing" generated={routing} id="fe-routing" />
-          <DiagramPanel title="Component tree" generated={componentTree} id="fe-component_tree" />
-          <StoredDiagrams diagrams={diagrams} exclude={["routing", "component_tree"]} prefix="fe" />
-        </div>
+        <DiagramSection
+          docKey={docKey}
+          doc={doc}
+          onRegenerateDiagram={onRegenerateDiagram}
+          regeneratingDiagram={regeneratingDiagram}
+        >
+          <DiagramPanel
+            title="Routing"
+            diagramName="routing"
+            docKey={docKey}
+            doc={doc}
+            generated={routing}
+            id="fe-routing"
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+          <DiagramPanel
+            title="Component tree"
+            diagramName="component_tree"
+            docKey={docKey}
+            doc={doc}
+            generated={componentTree}
+            id="fe-component_tree"
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+          <StoredDiagrams
+            diagrams={diagrams}
+            exclude={["routing", "component_tree"]}
+            prefix="fe"
+            docKey={docKey}
+            doc={doc}
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+        </DiagramSection>
       </div>
     );
   }
@@ -354,11 +685,42 @@ export function ArchitectureDocView({
             )}
           </section>
         ) : null}
-        <div className="space-y-4">
-          <DiagramPanel title="Auth flow" generated={authFlow} id="sec-auth_flow" />
-          <DiagramPanel title="RBAC flow" generated={rbacDiagram} id="sec-rbac_flow" />
-          <StoredDiagrams diagrams={diagrams} exclude={["auth_flow", "rbac_flow"]} prefix="sec" />
-        </div>
+        <DiagramSection
+          docKey={docKey}
+          doc={doc}
+          onRegenerateDiagram={onRegenerateDiagram}
+          regeneratingDiagram={regeneratingDiagram}
+        >
+          <DiagramPanel
+            title="Auth flow"
+            diagramName="auth_flow"
+            docKey={docKey}
+            doc={doc}
+            generated={authFlow}
+            id="sec-auth_flow"
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+          <DiagramPanel
+            title="RBAC flow"
+            diagramName="rbac"
+            docKey={docKey}
+            doc={doc}
+            generated={rbacDiagram}
+            id="sec-rbac"
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+          <StoredDiagrams
+            diagrams={diagrams}
+            exclude={["auth_flow", "rbac", "rbac_flow"]}
+            prefix="sec"
+            docKey={docKey}
+            doc={doc}
+            onRegenerateDiagram={onRegenerateDiagram}
+            regeneratingDiagram={regeneratingDiagram}
+          />
+        </DiagramSection>
       </div>
     );
   }
@@ -375,9 +737,21 @@ export function ArchitectureDocView({
           </ul>
         </section>
       ) : null}
-      <div className="space-y-4">
-        <StoredDiagrams diagrams={diagrams} prefix="ux" />
-      </div>
+      <DiagramSection
+        docKey={docKey}
+        doc={doc}
+        onRegenerateDiagram={onRegenerateDiagram}
+        regeneratingDiagram={regeneratingDiagram}
+      >
+        <StoredDiagrams
+          diagrams={diagrams}
+          prefix="ux"
+          docKey={docKey}
+          doc={doc}
+          onRegenerateDiagram={onRegenerateDiagram}
+          regeneratingDiagram={regeneratingDiagram}
+        />
+      </DiagramSection>
     </div>
   );
 }

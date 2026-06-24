@@ -12,11 +12,17 @@ from app.api.deps import get_current_user, require_roles
 from app.core.database import get_db
 from app.models.organization import Organization
 from app.models.user import User, UserRole
+from app.core.config import get_settings
+from app.core.crypto import decrypt_secret, encrypt_secret
 from app.schemas.ai_config import (
     AiConfigResponse,
     AiTierUpdate,
     FreeModeUpdate,
+    GithubConfigStatus,
+    GithubConfigUpdate,
     ModelCatalogEntry,
+    VpsConfigStatus,
+    VpsConfigUpdate,
     ProviderConfigUpdate,
     ProviderStatus,
     ProviderUsage,
@@ -65,6 +71,21 @@ def _mask_key(key: str | None) -> str | None:
     if len(key) <= 8:
         return "****"
     return f"{key[:7]}...{key[-4:]}"
+
+
+def _github_status(org: Organization) -> GithubConfigStatus:
+    cfg = (org.ai_provider_configs or {}).get("github_repo") or {}
+    settings = get_settings()
+    db_token = decrypt_secret(cfg.get("token"))
+    token = db_token or settings.github_repo_token
+    owner = cfg.get("owner") or settings.github_owner
+    source = "db" if db_token else ("env" if settings.github_repo_token else "none")
+    return GithubConfigStatus(
+        configured=bool(token),
+        masked_token=_mask_key(token),
+        owner=owner,
+        source=source,
+    )
 
 
 def _provider_status(org: Organization, provider: str) -> ProviderStatus:
@@ -353,3 +374,82 @@ async def update_provider_config(
     await db.commit()
     await db.refresh(org)
     return await _build_response(org, full=True)
+
+
+@router.get("/github", response_model=GithubConfigStatus)
+async def get_github_config(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.studio_owner, UserRole.studio_admin)),
+) -> GithubConfigStatus:
+    """Current GitHub repo-push credentials status (token masked)."""
+    org = await _get_org(db)
+    return _github_status(org)
+
+
+@router.patch("/github", response_model=GithubConfigStatus)
+async def set_github_config(
+    body: GithubConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.studio_owner, UserRole.studio_admin)),
+) -> GithubConfigStatus:
+    """Save the GitHub PAT + owner for the Build code factory (stored in DB)."""
+    org = await _get_org(db)
+    configs = dict(org.ai_provider_configs or {})
+    gh = dict(configs.get("github_repo") or {})
+    if body.token is not None:
+        if body.token.strip():
+            gh["token"] = encrypt_secret(body.token.strip())
+        else:
+            gh.pop("token", None)  # empty string clears it
+    if body.owner is not None:
+        gh["owner"] = body.owner.strip()
+    configs["github_repo"] = gh
+    org.ai_provider_configs = configs
+    await db.commit()
+    await db.refresh(org)
+    return _github_status(org)
+
+
+def _vps_status(org: Organization) -> VpsConfigStatus:
+    cfg = (org.ai_provider_configs or {}).get("vps_deploy") or {}
+    return VpsConfigStatus(
+        configured=bool(cfg.get("host") and cfg.get("user") and cfg.get("ssh_key") and cfg.get("path")),
+        host=cfg.get("host"),
+        user=cfg.get("user"),
+        path=cfg.get("path"),
+        has_key=bool(cfg.get("ssh_key")),
+    )
+
+
+@router.get("/vps", response_model=VpsConfigStatus)
+async def get_vps_config(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.studio_owner, UserRole.studio_admin)),
+) -> VpsConfigStatus:
+    """VPS deploy target status (SSH key never returned)."""
+    return _vps_status(await _get_org(db))
+
+
+@router.patch("/vps", response_model=VpsConfigStatus)
+async def set_vps_config(
+    body: VpsConfigUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.studio_owner, UserRole.studio_admin)),
+) -> VpsConfigStatus:
+    """Save the VPS deploy target (host/user/ssh_key/path) for the Build factory."""
+    org = await _get_org(db)
+    configs = dict(org.ai_provider_configs or {})
+    vps = dict(configs.get("vps_deploy") or {})
+    for field in ("host", "user", "ssh_key", "path"):
+        val = getattr(body, field)
+        if val is not None:
+            if val.strip():
+                # SSH key is sensitive → encrypt at rest; keep its formatting intact.
+                vps[field] = encrypt_secret(val) if field == "ssh_key" else val.strip()
+            else:
+                vps.pop(field, None)
+    configs["vps_deploy"] = vps
+    org.ai_provider_configs = configs
+    await db.commit()
+    await db.refresh(org)
+    return _vps_status(org)

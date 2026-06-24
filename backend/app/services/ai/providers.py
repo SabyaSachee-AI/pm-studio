@@ -221,6 +221,41 @@ FREE_ROUTING: dict[str, RoutingEntry] = {
         quality_stars=5,
         prompt_enhancement=True,
     ),
+    "code_generate": _build_free_routing(
+        task_label="Code Generation",
+        top4=[
+            ("openrouter", "poolside/laguna-m.1:free"),
+            ("huggingface", "Qwen/Qwen2.5-Coder-32B-Instruct"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+        ],
+        quality_note=(
+            "Code-specialist chain: Laguna M.1 (purpose-built for code) and "
+            "Qwen2.5-Coder first; GPT-OSS 120B for reliable structured JSON; "
+            "Gemini 2.5 Flash (1M ctx) as a strong context-keeping fallback. "
+            "Deep 20+ model fallback for uninterrupted generation."
+        ),
+        quality_stars=5,
+        prompt_enhancement=True,
+        max_models=24,  # deepest chain — codegen is long-running and quota-sensitive
+    ),
+    "code_polish": _build_free_routing(
+        task_label="Code Polish (quality pass)",
+        top4=[
+            ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "poolside/laguna-m.1:free"),
+        ],
+        quality_note=(
+            "Polish = highest-quality refactor. Strongest reasoners/large-context "
+            "models first (Nemotron Ultra 550B, GPT-OSS 120B, Gemini 1M ctx) so "
+            "whole-project quality lifts are reliable. Deep fallback."
+        ),
+        quality_stars=5,
+        prompt_enhancement=True,
+        max_models=24,
+    ),
     "prd_rewrite": _build_free_routing(
         task_label="PRD Rewrite",
         top4=[
@@ -360,6 +395,40 @@ LOW_COST_ROUTING: dict[str, RoutingEntry] = {
         prompt_enhancement=True,
         tail=LOW_COST_HEAVY_TAIL,
     ),
+    "code_generate": _build_free_routing(
+        task_label="Code Generation (low cost)",
+        top4=[
+            ("deepseek", "deepseek-chat"),
+            ("together", "Qwen/Qwen3-Coder-30B-Instruct"),
+            ("huggingface", "Qwen/Qwen2.5-Coder-32B-Instruct"),
+            ("openrouter", "poolside/laguna-m.1:free"),
+        ],
+        quality_note=(
+            "DeepSeek + Qwen Coder lead — top value coders; Laguna M.1 backup. "
+            "Deep 20+ model fallback for uninterrupted generation."
+        ),
+        quality_stars=5,
+        prompt_enhancement=True,
+        tail=LOW_COST_HEAVY_TAIL,
+        max_models=28,  # deepest chain — codegen is long-running and quota-sensitive
+    ),
+    "code_polish": _build_free_routing(
+        task_label="Code Polish (low cost)",
+        top4=[
+            ("deepseek", "deepseek-reasoner"),
+            ("deepseek", "deepseek-chat"),
+            ("together", "Qwen/Qwen3-Coder-30B-Instruct"),
+            ("aimlapi", "nvidia/nemotron-3-ultra"),
+        ],
+        quality_note=(
+            "DeepSeek-reasoner leads — strong refactoring/quality reasoning; "
+            "Qwen Coder + Nemotron Ultra back it up. Deep fallback."
+        ),
+        quality_stars=5,
+        prompt_enhancement=True,
+        tail=LOW_COST_HEAVY_TAIL,
+        max_models=28,
+    ),
     "prd_rewrite": _build_free_routing(
         task_label="PRD Rewrite (low cost)",
         top4=[
@@ -452,6 +521,23 @@ FREE_MODE_QUALITY_BOOSTS: dict[str, str] = {
         Include EXACT endpoint paths from the API spec.
         Be specific — vague instructions produce bad code.
     """,
+    "code_generate": """
+        IMPORTANT: Output COMPLETE, production-ready, runnable code — no TODOs,
+        no placeholders, no "...". Return valid JSON only, no markdown fences.
+        Match the project's exact stack, folder structure, and conventions.
+        Reuse the EXACT names/paths/signatures of already-generated files given
+        in context — imports must resolve, types must line up, no duplicate
+        definitions. Follow the task spec's files, endpoints, and DB columns
+        precisely. Code must lint, type-check, and build.
+    """,
+    "code_polish": """
+        IMPORTANT: Improve this file to production / class-one quality WITHOUT
+        changing its behaviour or public interface. Strengthen: input validation,
+        error handling, security (no secrets, safe queries), types, naming,
+        docstrings/comments, and idiomatic style. Keep the SAME path, exports,
+        and signatures so imports/types stay consistent across the project.
+        Return valid JSON only, no markdown fences. The result must still build.
+    """,
 }
 
 DEFAULT_PAID_ROUTING: dict[str, tuple[str, str]] = {
@@ -464,6 +550,8 @@ DEFAULT_PAID_ROUTING: dict[str, tuple[str, str]] = {
     "arch_generate": ("anthropic", "claude-sonnet-4-5"),
     "arch_single_doc": ("anthropic", "claude-sonnet-4-5"),
     "spec_generate": ("anthropic", "claude-sonnet-4-5"),
+    "code_generate": ("anthropic", "claude-sonnet-4-5"),
+    "code_polish": ("anthropic", "claude-sonnet-4-5"),
     "module_extract": ("anthropic", "claude-haiku-4-5"),
     "quality_check": ("anthropic", "claude-haiku-4-5"),
     "cost_estimate": ("anthropic", "claude-haiku-4-5"),

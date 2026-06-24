@@ -30,6 +30,9 @@ class SystemArchSchema(BaseModel):
     components: list[SystemComponent] = Field(default_factory=list)
     data_flow: list[str] = Field(default_factory=list)
     infrastructure: dict[str, Any] = Field(default_factory=dict)
+    # Reliability / NFR layer — availability target, RTO/RPO, failure modes,
+    # redundancy, scaling, capacity. Populated when an NFR profile is set.
+    reliability: dict[str, Any] = Field(default_factory=dict)
     diagrams: dict[str, str] = Field(default_factory=dict)
 
 
@@ -171,6 +174,8 @@ class ArchitectureResponse(BaseModel):
     resume_from: Optional[str] = None
     suite_canon: Optional[dict[str, Any]] = None
     consistency_report: Optional[dict[str, Any]] = None
+    nfr_profile: Optional[dict[str, Any]] = None
+    capabilities: Optional[dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
     doc_system_arch: Optional[dict] = None
@@ -198,3 +203,9 @@ class ArchitectureListItem(BaseModel):
     source_srs_display_name: Optional[str] = None
     docs_generated: int = 0
     docs_total: int = 6
+
+
+class DiagramMermaidSchema(BaseModel):
+    """Single Mermaid diagram returned by targeted diagram regeneration."""
+
+    mermaid: str = Field(description="Complete valid Mermaid diagram source code")
