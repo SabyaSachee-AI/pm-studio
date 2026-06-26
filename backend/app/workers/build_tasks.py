@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -177,7 +178,12 @@ def push_build_to_github_task(self, build_id: str) -> dict[str, Any]:
             return {"error": "Build not found"}
         build.generation_task_id = self.request.id
         db.commit()
-        return _run_async(push_build(UUID(build_id), db, _project_info(db, build)["name"]))
+        result = _run_async(push_build(UUID(build_id), db, _project_info(db, build)["name"]))
+        # Kick off the autonomous CI loop: watch CI → on failure AI-repair + re-push,
+        # repeat until green or repair attempts run out. No manual clicks.
+        if isinstance(result, dict) and result.get("status") == "pushed":
+            auto_ci_watch_task.apply_async((build_id, 0), countdown=25, queue="build")
+        return result
     except Exception as exc:  # noqa: BLE001
         logger.exception("GitHub push failed")
         if build is not None:
@@ -288,6 +294,96 @@ def repair_build_task(self, build_id: str) -> dict[str, Any]:
         if build is not None:
             build.last_error = str(exc)[:500]
             db.commit()
+        return {"error": str(exc)[:500]}
+    finally:
+        db.close()
+
+
+_AUTO_CI_POLL = 20        # seconds between CI status polls
+_AUTO_CI_MAX_POLLS = 90   # ~30 min hard cap waiting for one CI run to finish
+
+
+def _set_auto_ci(db, build: Build, phase: str, message: str) -> None:
+    """Record autonomous-CI progress so the UI can show it live."""
+    report = dict(build.quality_report or {})
+    report["auto_ci"] = {
+        "phase": phase, "message": message,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    build.quality_report = report
+    db.commit()
+
+
+@celery_app.task(bind=True, name="build.auto_ci", max_retries=None)
+def auto_ci_watch_task(self, build_id: str, polls: int = 0) -> dict[str, Any]:
+    """Autonomous CI loop: watch the latest CI run; on failure read the logs,
+    AI-fix the code, and re-push; repeat until CI is green or repair attempts run
+    out. Re-schedules itself (never blocks a worker)."""
+    from app.services.build.github import get_qa_status  # noqa: PLC0415
+    from app.services.build.service import (  # noqa: PLC0415
+        _MAX_REPAIR_ATTEMPTS,
+        repair_build_from_ci,
+    )
+
+    db = SyncSessionLocal()
+    try:
+        build = db.query(Build).filter(
+            Build.id == UUID(build_id), Build.deleted_at.is_(None)
+        ).first()
+        if not build or not build.github_full_name:
+            return {"stop": "no build/repo"}
+
+        qa = _run_async(get_qa_status(UUID(build_id), db))
+        status = qa.get("status")
+        conclusion = qa.get("conclusion")
+
+        # CI status unreadable (token issues) → stop, leave for the user.
+        if status in ("blocked", "auth_failed", "error"):
+            _set_auto_ci(db, build, "stopped",
+                         f"Auto-CI stopped — {qa.get('error') or 'cannot read CI status'}.")
+            return {"stop": status}
+
+        # Not finished yet → poll again later.
+        if conclusion is None:
+            if polls >= _AUTO_CI_MAX_POLLS:
+                _set_auto_ci(db, build, "stopped", "Auto-CI stopped — CI did not finish in time.")
+                return {"stop": "timeout"}
+            _set_auto_ci(db, build, "watching", "Waiting for CI to finish on GitHub…")
+            auto_ci_watch_task.apply_async(
+                (build_id, polls + 1), countdown=_AUTO_CI_POLL, queue="build"
+            )
+            return {"wait": status}
+
+        # CI passed.
+        if conclusion == "success":
+            _set_auto_ci(db, build, "passed", "CI passed — build is ready.")
+            return {"done": "passed"}
+
+        # CI failed → AI-repair if attempts remain.
+        report = dict(build.quality_report or {})
+        attempts = int(report.get("repair_attempts") or 0)
+        if attempts >= _MAX_REPAIR_ATTEMPTS:
+            _set_auto_ci(db, build, "stopped",
+                         f"Auto-repair tried {attempts}× and CI still fails — manual review needed.")
+            return {"stop": "limit"}
+
+        from app.models.project import Project  # noqa: PLC0415
+        project = db.query(Project).filter(Project.id == build.project_id).first()
+        pname = project.name if project else "project"
+        _set_auto_ci(db, build, "repairing",
+                     f"CI failed — AI reading logs & fixing (attempt {attempts + 1}/{_MAX_REPAIR_ATTEMPTS})…")
+        result = _run_async(repair_build_from_ci(UUID(build_id), db, pname))
+        if isinstance(result, dict) and "error" in result:
+            _set_auto_ci(db, build, "stopped", f"Auto-repair could not continue — {result['error']}")
+            return {"stop": result["error"]}
+
+        # Repair re-pushed → a fresh CI run is starting; watch it from scratch.
+        _set_auto_ci(db, build, "repushed",
+                     f"Fixed {result.get('files_fixed', 0)} file(s) & re-pushed — watching new CI run…")
+        auto_ci_watch_task.apply_async((build_id, 0), countdown=30, queue="build")
+        return {"repaired": attempts + 1}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Auto-CI watcher crashed")
         return {"error": str(exc)[:500]}
     finally:
         db.close()

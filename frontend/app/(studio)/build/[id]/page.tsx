@@ -343,8 +343,10 @@ export default function BuildWorkspacePage() {
   const pollQa = useCallback(async () => {
     try {
       setQa(await api.getBuildQa(id));
+      // Also refresh the build so autonomous-CI progress + status changes show live.
+      await refresh();
     } catch { /* not pushed yet */ }
-  }, [id]);
+  }, [id, refresh]);
 
   // Poll CI status once pushed (status qa) until the run completes.
   // Stop polling if CI is unreadable (blocked) — no point hammering a 403.
@@ -615,6 +617,26 @@ export default function BuildWorkspacePage() {
               <div className="flex items-start gap-2">
                 <i className={`ti mt-0.5 ${bad ? "ti-alert-triangle text-amber-400" : "ti-loader-2 animate-spin text-blue-300"}`} aria-hidden />
                 <div className="min-w-0 flex-1">
+                  {(() => {
+                    const auto = (build.quality_report as Record<string, unknown> | null)?.auto_ci as { phase?: string; message?: string } | undefined;
+                    if (!auto) return null;
+                    const active = ["watching", "repairing", "repushed"].includes(auto.phase || "");
+                    if (active) {
+                      return (
+                        <p className="mb-1.5 flex items-center gap-1.5 rounded bg-blue-950/40 px-2 py-1 font-medium text-blue-200">
+                          <i className="ti ti-robot animate-pulse" aria-hidden /> Auto-repair running — {auto.message}
+                        </p>
+                      );
+                    }
+                    if (auto.phase === "stopped") {
+                      return (
+                        <p className="mb-1.5 flex items-center gap-1.5 rounded bg-amber-950/40 px-2 py-1 font-medium text-amber-200">
+                          <i className="ti ti-robot-off" aria-hidden /> Auto-repair stopped — {auto.message}
+                        </p>
+                      );
+                    }
+                    return null;
+                  })()}
                   {!qa ? (
                     <p className="text-gray-300">Checking CI status on GitHub…</p>
                   ) : qa.status === "auth_failed" ? (
