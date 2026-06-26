@@ -102,6 +102,32 @@ function stageLabelCls(state: StageState): string {
   }
 }
 
+/** Numbered step badge shown on the main pipeline action buttons. */
+function StepNum({ n }: { n: number }) {
+  return (
+    <span className="mr-1.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-black/30 text-[10px] font-bold leading-none">
+      {n}
+    </span>
+  );
+}
+
+/** A copyable command line for the local-run instructions. */
+function CmdBlock({ cmd }: { cmd: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex items-center gap-2">
+      <code className="block flex-1 overflow-x-auto whitespace-pre rounded bg-gray-950 px-2 py-1 font-mono text-xs text-emerald-300">{cmd}</code>
+      <button
+        type="button"
+        onClick={() => { void navigator.clipboard?.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+        className="shrink-0 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:bg-gray-800"
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
 export default function BuildWorkspacePage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
@@ -454,16 +480,21 @@ export default function BuildWorkspacePage() {
             <span className="text-xs text-gray-400">{build.quality_score.toFixed(1)}/10</span>
           ) : null}
         </div>
+        {/* Action buttons — ordered by the build pipeline sequence */}
         <div className="flex flex-wrap items-center gap-2">
           <ArchModelSelector value={buildModel} onChange={setBuildModel} compact />
+
+          {/* 1 — Scaffold (only before any code exists) */}
           {build.status === "draft" ? (
             <Button size="sm" disabled={isGenerating} onClick={() => void handleScaffold()}>
-              <i className="ti ti-stack-2 mr-1.5" aria-hidden /> Scaffold repo
+              <StepNum n={1} /><i className="ti ti-stack-2 mr-1.5" aria-hidden /> Scaffold
             </Button>
           ) : null}
+
+          {/* 2 — Generate code */}
           {(build.status === "scaffolded" || build.status === "ready" || build.status === "qa") && !isGenerating ? (
             <Button size="sm" onClick={() => void handleGenerate(false)}>
-              <i className="ti ti-sparkles mr-1.5" aria-hidden /> Generate code
+              <StepNum n={2} /><i className="ti ti-sparkles mr-1.5" aria-hidden /> Generate code
             </Button>
           ) : null}
           {build.can_resume && !isGenerating ? (
@@ -471,34 +502,48 @@ export default function BuildWorkspacePage() {
               <i className="ti ti-refresh mr-1.5" aria-hidden /> Resume
             </Button>
           ) : null}
+
+          {/* 3 — Polish (AI) */}
           {build.file_count > 0 && !isGenerating ? (
-            <Button size="sm" variant="outline" onClick={() => void handlePush()}>
-              <i className="ti ti-brand-github mr-1.5" aria-hidden /> Push to GitHub
+            <Button size="sm" variant="outline" onClick={() => void handlePolish()}>
+              <StepNum n={3} /><i className="ti ti-wand mr-1.5" aria-hidden /> Polish (AI)
             </Button>
           ) : null}
+
+          {/* 4 — Generate tests */}
+          {build.file_count > 0 && !isGenerating ? (
+            <Button size="sm" variant="outline" onClick={() => void handleGenerateTests()}>
+              <StepNum n={4} /><i className="ti ti-test-pipe mr-1.5" aria-hidden /> Generate tests
+            </Button>
+          ) : null}
+
+          {/* 5 — Push to GitHub (triggers CI/QA automatically) */}
+          {build.file_count > 0 && !isGenerating ? (
+            <Button size="sm" variant="outline" onClick={() => void handlePush()}>
+              <StepNum n={5} /><i className="ti ti-brand-github mr-1.5" aria-hidden /> Push to GitHub
+            </Button>
+          ) : null}
+
+          {/* 6 — Local UI test (run locally + push/sync instructions inside) */}
+          {build.file_count > 0 ? (
+            <Button size="sm" variant="outline" onClick={() => void openUiTest()}>
+              <StepNum n={6} /><i className="ti ti-device-desktop-check mr-1.5" aria-hidden /> Local UI test
+            </Button>
+          ) : null}
+
+          {/* 7 — Deploy to VPS */}
+          {build.github_full_name && !isGenerating ? (
+            <Button size="sm" variant="outline" onClick={() => void handleDeploy()}>
+              <StepNum n={7} /><i className="ti ti-rocket mr-1.5" aria-hidden /> Deploy to VPS
+            </Button>
+          ) : null}
+
+          {/* divider — utility actions below (not part of the linear flow) */}
+          <span className="mx-1 h-5 w-px bg-gray-700" aria-hidden />
+
           {build.github_full_name && !isGenerating ? (
             <Button size="sm" variant="outline" disabled={busy} onClick={() => void handleSyncFromGithub()}>
               <i className="ti ti-cloud-download mr-1.5" aria-hidden /> Sync from GitHub
-            </Button>
-          ) : null}
-          {build.github_full_name && !isGenerating ? (
-            <Button size="sm" variant="outline" onClick={() => void handleDeploy()}>
-              <i className="ti ti-rocket mr-1.5" aria-hidden /> Deploy to VPS
-            </Button>
-          ) : null}
-          {build.file_count > 0 && !isGenerating ? (
-            <Button size="sm" variant="outline" onClick={() => void handlePolish()}>
-              <i className="ti ti-sparkles mr-1.5" aria-hidden /> Polish (AI)
-            </Button>
-          ) : null}
-          {build.file_count > 0 && !isGenerating ? (
-            <Button size="sm" variant="outline" onClick={() => void handleGenerateTests()}>
-              <i className="ti ti-test-pipe mr-1.5" aria-hidden /> Generate tests
-            </Button>
-          ) : null}
-          {build.file_count > 0 ? (
-            <Button size="sm" variant="outline" onClick={() => void openUiTest()}>
-              <i className="ti ti-device-desktop-check mr-1.5" aria-hidden /> Local UI test
             </Button>
           ) : null}
           <Button size="sm" variant="outline" disabled={busy || build.file_count === 0} onClick={() => void downloadBundle()}>
@@ -610,10 +655,29 @@ export default function BuildWorkspacePage() {
               <i className="ti ti-x" aria-hidden />
             </button>
           </div>
-          <p className="mb-2 text-xs text-gray-500">Run the app on your machine, then verify each acceptance criterion.</p>
-          <div className="mb-3 space-y-1">
-            <code className="block rounded bg-gray-950 px-2 py-1 font-mono text-xs text-emerald-300">{uiChecklist.clone_cmd}</code>
-            <code className="block rounded bg-gray-950 px-2 py-1 font-mono text-xs text-emerald-300">{uiChecklist.run_cmd}</code>
+          <p className="mb-2 text-xs text-gray-500">Run the app on your machine, verify each criterion, and (optionally) push fixes back.</p>
+          <div className="mb-3 space-y-2 rounded-lg border border-gray-800 bg-gray-950/60 p-3">
+            <div>
+              <p className="mb-1 text-xs font-medium text-gray-300">1 · Get the code</p>
+              <CmdBlock cmd={uiChecklist.clone_cmd} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-medium text-gray-300">2 · Configure environment</p>
+              <CmdBlock cmd="cp .env.example .env   # then edit any secrets/keys" />
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-medium text-gray-300">3 · Run it locally</p>
+              <CmdBlock cmd={uiChecklist.run_cmd} />
+              <p className="mt-1 text-[11px] text-gray-500">Open the URL printed in the terminal (e.g. http://localhost:3000). No Docker? use each app&apos;s own commands (e.g. <span className="font-mono">npm install &amp;&amp; npm run dev</span>).</p>
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-medium text-gray-300">4 · Made fixes? Push them to GitHub</p>
+              <CmdBlock cmd={'git add -A\ngit commit -m "Local fixes during UI test"\ngit push'} />
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-medium text-gray-300">5 · Pull changes back into PM Studio</p>
+              <p className="text-[11px] text-gray-500">Click <span className="font-medium text-gray-300">&ldquo;Sync from GitHub&rdquo;</span> at the top — it overwrites PM Studio&apos;s copies with the repo (GitHub wins).</p>
+            </div>
           </div>
           {uiChecklist.items.length === 0 ? (
             <p className="text-xs text-gray-600">No acceptance criteria found — generate task specs to populate the checklist.</p>
