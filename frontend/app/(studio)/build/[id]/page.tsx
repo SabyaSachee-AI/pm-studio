@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   api,
@@ -38,6 +38,68 @@ const FILE_STATUS_DOT: Record<string, string> = {
   qa_passed: "bg-emerald-500",
   qa_failed: "bg-red-500",
 };
+
+// ── Pipeline stage stepper ──────────────────────────────────────────────────
+type StageState = "done" | "active" | "blocked" | "failed" | "todo";
+type Stage = { key: string; label: string; icon: string; state: StageState; hint?: string };
+type QaState = { status?: string; conclusion?: string | null } | null;
+
+function deriveStages(build: BuildDetail, qa: QaState): Stage[] {
+  const files = build.file_count;
+  const pushed = !!build.github_full_name;
+  const s = build.status;
+  const report = (build.quality_report ?? {}) as Record<string, unknown>;
+  const uiSigned = !!(report?.ui_test as { signed_off?: boolean } | undefined)?.signed_off;
+  const deployUrl = (report?.deploy as { url?: string } | undefined)?.url;
+
+  const scaffold: StageState =
+    s === "scaffolding" ? "active"
+    : (files > 0 || ["scaffolded", "generating", "ready", "qa", "failed"].includes(s)) ? "done"
+    : "todo";
+  const generate: StageState = s === "generating" ? "active" : files > 0 ? "done" : "todo";
+  const push: StageState = pushed ? "done" : "todo";
+
+  let ci: StageState = "todo";
+  if (pushed) {
+    if (s === "ready") ci = "done";
+    else if (s === "failed" || qa?.conclusion === "failure") ci = "failed";
+    else if (qa?.status === "blocked") ci = "blocked";
+    else if (s === "qa") ci = "active";
+    else ci = "done";
+  }
+
+  const uitest: StageState = uiSigned ? "done" : "todo";
+  const deploy: StageState = deployUrl ? "done" : "todo";
+
+  return [
+    { key: "scaffold", label: "Scaffold", icon: "ti-stack-2", state: scaffold },
+    { key: "generate", label: "Generate code", icon: "ti-sparkles", state: generate, hint: files > 0 ? `${files} files` : undefined },
+    { key: "push", label: "Push", icon: "ti-brand-github", state: push },
+    { key: "ci", label: "CI / QA", icon: "ti-test-pipe", state: ci, hint: qa?.conclusion ?? (qa?.status === "blocked" ? "blocked" : undefined) ?? undefined },
+    { key: "uitest", label: "UI test", icon: "ti-device-desktop-check", state: uitest, hint: uiSigned ? "signed off" : undefined },
+    { key: "deploy", label: "Deploy", icon: "ti-rocket", state: deploy, hint: deployUrl ? "live" : undefined },
+  ];
+}
+
+function stageDotCls(state: StageState): string {
+  switch (state) {
+    case "done": return "border border-emerald-700 bg-emerald-900/60 text-emerald-300";
+    case "active": return "border border-amber-600 bg-amber-900/50 text-amber-300 animate-pulse";
+    case "failed": return "border border-red-700 bg-red-900/50 text-red-300";
+    case "blocked": return "border border-amber-700 bg-amber-900/40 text-amber-300";
+    default: return "border border-gray-700 bg-gray-800 text-gray-500";
+  }
+}
+
+function stageLabelCls(state: StageState): string {
+  switch (state) {
+    case "done": return "text-emerald-300";
+    case "active": return "text-amber-300";
+    case "failed": return "text-red-300";
+    case "blocked": return "text-amber-300";
+    default: return "text-gray-500";
+  }
+}
 
 export default function BuildWorkspacePage() {
   const router = useRouter();
@@ -418,6 +480,28 @@ export default function BuildWorkspacePage() {
             <i className="ti ti-trash" aria-hidden />
           </Button>
         </div>
+      </div>
+
+      {/* Pipeline stage stepper — full flow at a glance */}
+      <div className="flex items-center gap-1 overflow-x-auto rounded-lg border border-gray-800 bg-gray-900/40 px-3 py-2">
+        {deriveStages(build, qa).map((st, i, arr) => (
+          <Fragment key={st.key}>
+            {i > 0 ? (
+              <div className={`h-px w-5 shrink-0 sm:w-8 ${arr[i - 1].state === "done" ? "bg-emerald-700" : "bg-gray-700"}`} />
+            ) : null}
+            <div className="flex shrink-0 items-center gap-2" title={st.hint || st.label}>
+              <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs ${stageDotCls(st.state)}`}>
+                {st.state === "done" ? <i className="ti ti-check" aria-hidden />
+                  : st.state === "failed" || st.state === "blocked" ? <i className="ti ti-alert-triangle" aria-hidden />
+                  : <i className={`ti ${st.icon}`} aria-hidden />}
+              </span>
+              <div className="leading-tight">
+                <p className={`text-xs font-medium ${stageLabelCls(st.state)}`}>{st.label}</p>
+                {st.hint ? <p className="text-[10px] text-gray-500">{st.hint}</p> : null}
+              </div>
+            </div>
+          </Fragment>
+        ))}
       </div>
 
       {/* GitHub + CI quality gate */}
