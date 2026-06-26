@@ -327,6 +327,32 @@ async def get_build_qa(
         sync_db.close()
 
 
+@router.post("/{build_id}/sync-from-github")
+async def sync_from_github(
+    build_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> dict:
+    """Pull the repo's latest commit back into PM Studio (GitHub wins).
+
+    Use after editing code locally and `git push`-ing — mirrors the repo into the
+    build's files: overwrites changed files, adds new ones, removes deleted ones.
+    """
+    build = await _load_build(build_id, db)
+    if not build.github_full_name:
+        raise HTTPException(status_code=400, detail="Build not pushed to GitHub yet")
+    from app.core.database import SyncSessionLocal  # noqa: PLC0415
+    from app.services.build.github import pull_build_from_github  # noqa: PLC0415
+    sync_db = SyncSessionLocal()
+    try:
+        result = await pull_build_from_github(build_id, sync_db)
+    finally:
+        sync_db.close()
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
 @router.post("/{build_id}/mark-ready", response_model=BuildResponse)
 async def mark_build_ready(
     build_id: UUID,

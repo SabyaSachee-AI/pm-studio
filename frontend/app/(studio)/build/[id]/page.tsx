@@ -251,6 +251,29 @@ export default function BuildWorkspacePage() {
     }
   }
 
+  async function handleSyncFromGithub() {
+    if (!window.confirm(
+      "Sync from GitHub?\n\nThis pulls the repo's latest commit into PM Studio and OVERWRITES local copies (GitHub wins). Use this after you pushed local edits. Make sure your changes are pushed first.",
+    )) return;
+    setError("");
+    setBusy(true);
+    try {
+      const r = await api.syncBuildFromGithub(id);
+      const b = await refresh();
+      // If the open file changed, reload it
+      if (selectedId) {
+        const stillThere = b.files.some((f) => f.id === selectedId);
+        if (stillThere) { const full = await api.getBuildFile(id, selectedId); setFile(full); setDraft(full.content); }
+        else { setFile(null); setSelectedId(null); setDraft(""); }
+      }
+      setError(`Synced from GitHub — ${r.updated} updated, ${r.added} added, ${r.removed} removed.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sync failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleMarkReady() {
     if (!window.confirm(
       "Mark this build as ready?\n\nUse this when CI passed (or you verified the app locally) but PM Studio can't read the CI status — e.g. the GitHub token is missing Actions: Read.",
@@ -451,6 +474,11 @@ export default function BuildWorkspacePage() {
           {build.file_count > 0 && !isGenerating ? (
             <Button size="sm" variant="outline" onClick={() => void handlePush()}>
               <i className="ti ti-brand-github mr-1.5" aria-hidden /> Push to GitHub
+            </Button>
+          ) : null}
+          {build.github_full_name && !isGenerating ? (
+            <Button size="sm" variant="outline" disabled={busy} onClick={() => void handleSyncFromGithub()}>
+              <i className="ti ti-cloud-download mr-1.5" aria-hidden /> Sync from GitHub
             </Button>
           ) : null}
           {build.github_full_name && !isGenerating ? (

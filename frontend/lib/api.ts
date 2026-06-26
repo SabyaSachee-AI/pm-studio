@@ -1116,6 +1116,11 @@ export class ApiClient {
   async markBuildReady(id: string): Promise<BuildSummary> {
     return this.request(`/builds/${id}/mark-ready`, { method: "POST" });
   }
+  async syncBuildFromGithub(id: string): Promise<{
+    status: string; added: number; updated: number; removed: number; total: number;
+  }> {
+    return this.request(`/builds/${id}/sync-from-github`, { method: "POST" });
+  }
   async generateBuildTests(id: string, model?: ModelChoice | null) {
     return this.request<{ build_id: string; task_id: string; status: string }>(
       `/builds/${id}/generate-tests${this.modelQS(model)}`, { method: "POST" });

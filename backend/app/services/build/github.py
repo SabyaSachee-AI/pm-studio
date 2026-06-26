@@ -224,6 +224,106 @@ async def get_qa_status(build_id: UUID, db: Any) -> dict[str, Any]:
             "run_url": run.get("html_url"), "quality_score": build.quality_score}
 
 
+_SYNC_SKIP_DIRS = {
+    ".git", "node_modules", ".next", "dist", "build", "venv", ".venv",
+    "__pycache__", ".turbo", ".cache", "coverage", ".pytest_cache",
+}
+_LANG_BY_EXT = {
+    "ts": "typescript", "tsx": "typescript", "js": "javascript", "jsx": "javascript",
+    "py": "python", "json": "json", "md": "markdown", "css": "css", "scss": "scss",
+    "html": "html", "yml": "yaml", "yaml": "yaml", "sh": "shell", "sql": "sql",
+    "toml": "toml", "ini": "ini", "env": "ini", "xml": "xml",
+}
+
+
+def _lang_for(path: str) -> str:
+    low = path.lower()
+    if "dockerfile" in low:
+        return "dockerfile"
+    return _LANG_BY_EXT.get(low.rsplit(".", 1)[-1], "") if "." in low else ""
+
+
+async def pull_build_from_github(build_id: UUID, db: Any) -> dict[str, Any]:
+    """Mirror the repo's latest commit back into the build's files (GitHub wins).
+
+    Downloads the default-branch zipball, then for each text file: overwrites an
+    existing row if changed, inserts new ones, and soft-deletes rows no longer in
+    the repo — a true mirror so local edits pushed to GitHub flow back into PM Studio.
+    """
+    build = db.query(Build).filter(Build.id == build_id).first()
+    if not build or not build.github_full_name:
+        return {"error": "Build not pushed to GitHub yet"}
+    branch = build.default_branch or "main"
+
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        r = await client.get(
+            f"{_API}/repos/{build.github_full_name}/zipball/{branch}", headers=_headers()
+        )
+    if r.status_code == 403:
+        return {"error": "GitHub token cannot read repo contents (403). Check Contents: Read access."}
+    if r.status_code != 200:
+        return {"error": f"Could not download repo ({r.status_code})"}
+
+    repo_files: dict[str, str] = {}
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(r.content))
+    except Exception:  # noqa: BLE001
+        return {"error": "Downloaded archive could not be read"}
+    for name in zf.namelist():
+        if name.endswith("/"):
+            continue
+        parts = name.split("/", 1)  # strip GitHub's top-level "owner-repo-sha/" folder
+        if len(parts) < 2 or not parts[1]:
+            continue
+        rel = parts[1]
+        if any(seg in _SYNC_SKIP_DIRS for seg in rel.split("/")):
+            continue
+        data = zf.read(name)
+        if len(data) > 1_000_000:  # skip oversized/binary blobs
+            continue
+        try:
+            repo_files[rel] = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue  # binary — not tracked as an editable source file
+
+    from datetime import datetime, timezone  # noqa: PLC0415
+    from app.models.build import FileStatus  # noqa: PLC0415
+
+    existing = {
+        f.path: f
+        for f in db.query(GeneratedFile)
+        .filter(GeneratedFile.build_id == build_id, GeneratedFile.deleted_at.is_(None))
+        .all()
+    }
+    added = updated = removed = 0
+    for path, content in repo_files.items():
+        f = existing.get(path)
+        if f is None:
+            db.add(GeneratedFile(
+                build_id=build_id, path=path, content=content,
+                language=_lang_for(path), status=FileStatus.generated,
+            ))
+            added += 1
+        elif f.content != content:
+            f.content = content
+            f.status = FileStatus.generated
+            updated += 1
+    for path, f in existing.items():
+        if path not in repo_files:
+            f.deleted_at = datetime.now(timezone.utc)
+            removed += 1
+
+    report = dict(build.quality_report or {})
+    report["last_sync"] = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "added": added, "updated": updated, "removed": removed, "source": "github",
+    }
+    build.quality_report = report
+    db.commit()
+    return {"status": "synced", "added": added, "updated": updated,
+            "removed": removed, "total": len(repo_files)}
+
+
 async def verify_token(probe_repo: str | None = None) -> dict[str, Any]:
     """Best-effort capability check for the configured GitHub token.
 
