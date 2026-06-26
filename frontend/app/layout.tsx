@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "PM Studio",
-  description: "AI-powered project management",
+  description: "The Ultimate Web App Ecosystem",
 };
 
 export default function RootLayout({

@@ -79,7 +79,7 @@ export function Sidebar() {
         <div className="flex items-center justify-between border-b border-gray-800 px-4 py-5">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-white">PM Studio</p>
-            <p className="text-xs text-gray-500">AI project management</p>
+            <p className="text-xs text-gray-500">The Ultimate Web App Ecosystem</p>
           </div>
           <button
             onClick={() => setCollapsed(true)}

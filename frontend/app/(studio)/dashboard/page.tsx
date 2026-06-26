@@ -443,7 +443,7 @@ export default function DashboardPage() {
 
       {/* ── Footer ──────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between border-t border-gray-800/60 pt-4 text-[10px] text-gray-700">
-        <span>PM Studio — AI project management</span>
+        <span>PM Studio — The Ultimate Web App Ecosystem</span>
         <span>Stats generated {stats.generated_at ? new Date(stats.generated_at).toLocaleTimeString() : "—"}</span>
       </div>
     </div>
