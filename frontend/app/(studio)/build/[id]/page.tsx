@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
 import { ArchModelSelector } from "@/components/ui/ArchModelSelector";
+import { CodeEditor } from "@/components/ui/CodeEditor";
 import { useAiJob } from "@/lib/hooks/useAiJob";
 import { downloadTextFile, slugFilename } from "@/lib/specMarkdown";
 
@@ -682,12 +683,9 @@ export default function BuildWorkspacePage() {
                   </Button>
                 </div>
               </div>
-              <textarea
-                className="min-h-0 flex-1 resize-none bg-gray-950 p-3 font-mono text-xs leading-5 text-gray-200 focus:outline-none"
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                spellCheck={false}
-              />
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <CodeEditor path={file.path} value={draft} onChange={setDraft} />
+              </div>
               <div className="border-t border-gray-800 p-2">
                 <div className="flex items-center gap-2">
                   <input
