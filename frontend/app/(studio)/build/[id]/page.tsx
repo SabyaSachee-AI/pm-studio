@@ -177,6 +177,15 @@ export default function BuildWorkspacePage() {
     return () => clearInterval(t);
   }, [build, refresh]);
 
+  // Clear a generation bar stuck on QUEUED: happens when the page re-attaches to
+  // a finished run that Celery has forgotten (reports PENDING forever). Never
+  // clears an actively generating build.
+  useEffect(() => {
+    if (aiJob.status !== "pending") return;
+    const terminal = build ? (build.status === "ready" || build.status === "failed") : false;
+    if (terminal || aiJob.elapsedSeconds > 75) aiJob.reset();
+  }, [aiJob.status, aiJob.elapsedSeconds, build?.status, aiJob.reset]);
+
   async function openFile(f: GeneratedFileListItem) {
     setSelectedId(f.id);
     setError("");

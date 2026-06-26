@@ -110,6 +110,12 @@ async def push_build(build_id: UUID, db: Any, project_name: str) -> dict[str, An
     if not build:
         return {"error": "Build not found"}
 
+    # Guarantee the repo ships PM Studio's deterministic CI/CD workflows, never a
+    # model's variant (which could break CI, e.g. npm cache needing a lockfile).
+    from app.services.build.service import ensure_deterministic_workflows  # noqa: PLC0415
+    ensure_deterministic_workflows(db, build)
+    db.commit()
+
     files = (
         db.query(GeneratedFile)
         .filter(GeneratedFile.build_id == build_id, GeneratedFile.deleted_at.is_(None))

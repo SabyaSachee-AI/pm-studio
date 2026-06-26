@@ -204,6 +204,12 @@ def _static_check_file(path: str, content: str) -> str | None:
     return None
 
 
+# PM Studio owns the CI/CD workflows. AI-generated files under this path are
+# ignored so a model can never overwrite the deterministic, runnable workflows
+# (which caused false CI failures, e.g. npm-cache requiring a missing lockfile).
+_PROTECTED_WORKFLOW_PREFIX = ".github/workflows/"
+
+
 def _persist_file(
     db: Session,
     build: Build,
@@ -212,8 +218,15 @@ def _persist_file(
     language: str,
     task_id: UUID | None,
     status: FileStatus = FileStatus.generated,
-) -> GeneratedFile:
-    """Insert or update a generated file (dedupe by path within the build)."""
+    force: bool = False,
+) -> GeneratedFile | None:
+    """Insert or update a generated file (dedupe by path within the build).
+
+    Writes under ``.github/workflows/`` are ignored unless ``force=True`` — only
+    PM Studio's deterministic CI/CD templates may live there.
+    """
+    if not force and path.lstrip("/").startswith(_PROTECTED_WORKFLOW_PREFIX):
+        return None
     existing = (
         db.query(GeneratedFile)
         .filter(
@@ -389,6 +402,16 @@ jobs:
 """
 
 
+def ensure_deterministic_workflows(db: Session, build: Build) -> None:
+    """Force PM Studio's CI/CD workflows into the build (overwriting any AI copy).
+
+    Called at scaffold, after generation, and before every push so the repo
+    always ships the robust, runnable workflows — never a model's variant.
+    """
+    _persist_file(db, build, ".github/workflows/ci.yml", _CI_WORKFLOW, "yaml", task_id=None, force=True)
+    _persist_file(db, build, ".github/workflows/deploy.yml", _DEPLOY_WORKFLOW, "yaml", task_id=None, force=True)
+
+
 async def build_scaffold(build_id: UUID, db: Session, project_info: dict[str, Any]) -> dict[str, Any]:
     """Generate the repo skeleton from the architecture and persist scaffold files."""
     build = db.query(Build).filter(Build.id == build_id).first()
@@ -442,8 +465,7 @@ async def build_scaffold(build_id: UUID, db: Session, project_info: dict[str, An
 
     # Deterministic CI/CD workflows — guarantees correct secret names + a deploy
     # path regardless of what the AI produced.
-    _persist_file(db, build, ".github/workflows/ci.yml", _CI_WORKFLOW, "yaml", task_id=None)
-    _persist_file(db, build, ".github/workflows/deploy.yml", _DEPLOY_WORKFLOW, "yaml", task_id=None)
+    ensure_deterministic_workflows(db, build)
 
     build.scaffold = {"dependencies": result.dependencies, "scripts": result.scripts, "notes": result.notes}
     build.status = BuildStatus.scaffolded
@@ -691,6 +713,9 @@ async def generate_build_code(build_id: UUID, db: Session, *, resume: bool = Fal
                                  "message": "Static-checking generated files…"}
     db.commit()
     static = await _validate_and_repair(db, build)
+
+    # Re-assert PM Studio's CI/CD workflows (in case anything slipped in earlier).
+    ensure_deterministic_workflows(db, build)
 
     report = dict(build.quality_report or {})
     report["static_check"] = static
