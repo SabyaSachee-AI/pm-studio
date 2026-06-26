@@ -140,7 +140,7 @@ export default function BuildWorkspacePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [buildModel, setBuildModel] = useState<ModelChoice | null>(null);
-  const [qa, setQa] = useState<{ status?: string; conclusion?: string | null; run_url?: string; message?: string } | null>(null);
+  const [qa, setQa] = useState<{ status?: string; conclusion?: string | null; run_url?: string; message?: string; error?: string } | null>(null);
   const [showUiTest, setShowUiTest] = useState(false);
   const [uiChecklist, setUiChecklist] = useState<{ clone_cmd: string; run_cmd: string; items: { key: string; task_title: string; criterion: string }[] } | null>(null);
   const [uiResults, setUiResults] = useState<Record<string, { status: string; note: string }>>({});
@@ -578,52 +578,12 @@ export default function BuildWorkspacePage() {
         ))}
       </div>
 
-      {/* GitHub + CI quality gate */}
+      {/* GitHub repo + live URL */}
       {build.repo_url ? (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-gray-800 bg-gray-900/50 px-3 py-2 text-xs">
           <a href={build.repo_url} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">
             <i className="ti ti-brand-github mr-1" aria-hidden />{build.github_full_name}
           </a>
-          {/* CI status — honest about what's actually happening */}
-          {qa?.status === "blocked" ? (
-            <span className="flex flex-wrap items-center gap-2 text-amber-300">
-              <i className="ti ti-alert-triangle" aria-hidden />
-              CI status unavailable — GitHub token is missing <b>Actions: Read</b>.
-              <a href="/admin/ai-config" className="underline hover:text-amber-200">Fix token</a>
-              {build.repo_url ? (
-                <a href={`${build.repo_url}/actions`} target="_blank" rel="noreferrer" className="underline hover:text-amber-200">Open Actions</a>
-              ) : null}
-            </span>
-          ) : qa?.status === "no_runs" ? (
-            <span className="flex items-center gap-1 text-gray-400">
-              <i className="ti ti-clock" aria-hidden /> {qa.message || "Waiting for CI to start…"}
-              {build.repo_url ? (
-                <a href={`${build.repo_url}/actions`} target="_blank" rel="noreferrer" className="ml-1 underline">Open Actions</a>
-              ) : null}
-            </span>
-          ) : qa?.status ? (
-            <span className={
-              qa.conclusion === "success" ? "text-emerald-400"
-              : qa.conclusion === "failure" ? "text-red-400"
-              : "flex items-center gap-1 text-amber-400"
-            }>
-              {qa.conclusion ? `CI: ${qa.conclusion}` : (
-                <><i className="ti ti-loader-2 animate-spin" aria-hidden /> CI running ({qa.status})</>
-              )}
-              {qa.run_url ? <a href={qa.run_url} target="_blank" rel="noreferrer" className="ml-1 underline">view run</a> : null}
-            </span>
-          ) : qa?.message ? <span className="text-gray-500">{qa.message}</span> : null}
-          {qa?.conclusion === "failure" && !isGenerating ? (
-            <Button size="xs" onClick={() => void handleRepair()}>
-              <i className="ti ti-sparkles mr-1" aria-hidden /> Fix with AI &amp; re-push
-            </Button>
-          ) : null}
-          {/* Manual override — a build must never be permanently stuck on qa */}
-          {build.status === "qa" && qa?.conclusion !== "success" && !isGenerating ? (
-            <Button size="xs" variant="outline" onClick={() => void handleMarkReady()}>
-              <i className="ti ti-circle-check mr-1" aria-hidden /> Mark ready
-            </Button>
-          ) : null}
           {(() => {
             const dep = (build.quality_report as Record<string, unknown> | null)?.deploy as { url?: string } | undefined;
             return dep?.url ? (
@@ -633,6 +593,66 @@ export default function BuildWorkspacePage() {
             ) : null;
           })()}
         </div>
+      ) : null}
+
+      {/* CI / QA explainer — always tells you WHY this stage is where it is */}
+      {build.github_full_name && (build.status === "qa" || build.status === "failed" || qa?.conclusion === "failure") ? (
+        (() => {
+          const bad = qa?.status === "blocked" || qa?.conclusion === "failure" || build.status === "failed" || qa?.status === "no_runs";
+          return (
+            <div className={`rounded-lg border p-3 text-xs ${bad ? "border-amber-900/50 bg-amber-950/20" : "border-blue-900/40 bg-blue-950/20"}`}>
+              <div className="flex items-start gap-2">
+                <i className={`ti mt-0.5 ${bad ? "ti-alert-triangle text-amber-400" : "ti-loader-2 animate-spin text-blue-300"}`} aria-hidden />
+                <div className="min-w-0 flex-1">
+                  {!qa ? (
+                    <p className="text-gray-300">Checking CI status on GitHub…</p>
+                  ) : qa.status === "blocked" ? (
+                    <>
+                      <p className="font-medium text-amber-300">CI status can&apos;t be read — that&apos;s why this stage is stuck.</p>
+                      <p className="mt-0.5 text-gray-400">
+                        Your GitHub token is missing <b>Actions: Read</b>, so PM Studio can&apos;t see whether CI passed.
+                        Your code is already on GitHub — only the status check is blocked, not the build.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <a href="/admin/ai-config" className="rounded border border-amber-700 px-2 py-1 text-amber-200 hover:bg-amber-950/40">Fix token (add Actions: Read)</a>
+                        <a href={`${build.repo_url}/actions`} target="_blank" rel="noreferrer" className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:bg-gray-800">Open Actions on GitHub</a>
+                        <button onClick={() => void handleMarkReady()} className="rounded border border-emerald-800 px-2 py-1 text-emerald-300 hover:bg-emerald-950/40">Mark ready &amp; continue</button>
+                      </div>
+                    </>
+                  ) : qa.status === "no_runs" ? (
+                    <>
+                      <p className="font-medium text-gray-200">No CI run has started yet — that&apos;s why this stage is waiting.</p>
+                      <p className="mt-0.5 text-gray-400">
+                        It can take a minute after a push. If it never appears, the workflow file may be missing or
+                        Actions may be disabled on the repo.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <a href={`${build.repo_url}/actions`} target="_blank" rel="noreferrer" className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:bg-gray-800">Open Actions on GitHub</a>
+                        <button onClick={() => void handleMarkReady()} className="rounded border border-emerald-800 px-2 py-1 text-emerald-300 hover:bg-emerald-950/40">Mark ready &amp; continue</button>
+                      </div>
+                    </>
+                  ) : qa.conclusion === "failure" || build.status === "failed" ? (
+                    <>
+                      <p className="font-medium text-red-300">CI failed — that&apos;s why this stage is red.</p>
+                      <p className="mt-0.5 text-gray-400">A test or build step failed on GitHub. Open the run logs, or let AI read the logs and fix + re-push.</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {qa.run_url ? <a href={qa.run_url} target="_blank" rel="noreferrer" className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:bg-gray-800">View run logs</a> : null}
+                        {!isGenerating ? <button onClick={() => void handleRepair()} className="rounded border border-blue-800 px-2 py-1 text-blue-200 hover:bg-blue-950/40">Fix with AI &amp; re-push</button> : null}
+                        <button onClick={() => void handleMarkReady()} className="rounded border border-emerald-800 px-2 py-1 text-emerald-300 hover:bg-emerald-950/40">Mark ready anyway</button>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-gray-300">
+                      CI is running on GitHub… this stage clears automatically when it finishes.
+                      {qa.run_url ? <a href={qa.run_url} target="_blank" rel="noreferrer" className="ml-1 underline">view run</a> : null}
+                    </p>
+                  )}
+                  {qa?.error ? <p className="mt-2 text-[11px] text-gray-500">Detail: {qa.error}</p> : null}
+                </div>
+              </div>
+            </div>
+          );
+        })()
       ) : null}
 
       {isGenerating || aiJob.isVisible ? (
