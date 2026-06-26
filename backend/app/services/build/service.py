@@ -204,6 +204,32 @@ def _static_check_file(path: str, content: str) -> str | None:
     return None
 
 
+# Invisible characters that routinely break compilers/linters when a model
+# emits them by accident (NBSP instead of space, zero-width joiners, BOM).
+_INVISIBLE = str.maketrans({
+    "﻿": "", "​": "", "‌": "", "‍": "", "⁠": "",
+    " ": " ",  # non-breaking space → normal space (a classic "Invalid character")
+})
+
+
+def _sanitize_code(path: str, content: str) -> str:
+    """Clean generated content before storing.
+
+    Removes invisible characters that break parsers (the "Invalid character"
+    class of CI failures) and strips an accidental wrapping markdown code fence
+    (```lang … ```) the model sometimes adds around a whole file.
+    """
+    content = content.translate(_INVISIBLE)
+    low = path.lower()
+    if not (low.endswith(".md") or low.endswith(".mdx")):
+        stripped = content.strip()
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
+            if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+                content = "\n".join(lines[1:-1]) + "\n"
+    return content
+
+
 # PM Studio owns the CI/CD workflows. AI-generated files under this path are
 # ignored so a model can never overwrite the deterministic, runnable workflows
 # (which caused false CI failures, e.g. npm-cache requiring a missing lockfile).
@@ -227,6 +253,7 @@ def _persist_file(
     """
     if not force and path.lstrip("/").startswith(_PROTECTED_WORKFLOW_PREFIX):
         return None
+    content = _sanitize_code(path, content)
     existing = (
         db.query(GeneratedFile)
         .filter(
@@ -805,7 +832,7 @@ async def ai_edit_file(build_id: UUID, file_id: UUID, instruction: str, db: Sess
 
 # ── CI repair loop: read failed CI logs → AI fix → re-push ───────────────────
 
-_MAX_REPAIR_ATTEMPTS = 3
+_MAX_REPAIR_ATTEMPTS = 5
 
 REPAIR_SYSTEM = (
     "You are a senior engineer fixing a CI failure. You are given the failing CI "
