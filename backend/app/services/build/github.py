@@ -141,6 +141,7 @@ async def push_build(build_id: UUID, db: Any, project_name: str) -> dict[str, An
 
         # Blobs
         tree_items: list[dict[str, Any]] = []
+        pushed_paths: set[str] = set()
         for f in files:
             blob = await client.post(
                 f"{_API}/repos/{full_name}/git/blobs",
@@ -150,8 +151,25 @@ async def push_build(build_id: UUID, db: Any, project_name: str) -> dict[str, An
             )
             if blob.status_code not in (200, 201):
                 raise GitHubError(f"Blob upload failed for {f.path} ({blob.status_code})")
-            tree_items.append({"path": f.path.lstrip("/"), "mode": _GIT_MODE_FILE,
+            p = f.path.lstrip("/")
+            pushed_paths.add(p)
+            tree_items.append({"path": p, "mode": _GIT_MODE_FILE,
                                "type": "blob", "sha": blob.json()["sha"]})
+
+        # Purge stray workflow files: the push is additive (base_tree retained),
+        # so a model's leftover .github/workflows/* would otherwise keep running.
+        # Delete any workflow file in the repo that we are not pushing ourselves.
+        rt = await client.get(
+            f"{_API}/repos/{full_name}/git/trees/{base_tree}?recursive=1", headers=_headers()
+        )
+        if rt.status_code == 200:
+            for entry in rt.json().get("tree", []):
+                ep = entry.get("path", "")
+                if (entry.get("type") == "blob"
+                        and ep.startswith(".github/workflows/")
+                        and ep not in pushed_paths):
+                    tree_items.append({"path": ep, "mode": _GIT_MODE_FILE,
+                                       "type": "blob", "sha": None})  # None = delete
 
         # Tree → commit → move ref
         tree = await client.post(
