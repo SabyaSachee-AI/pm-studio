@@ -190,6 +190,15 @@ async def get_qa_status(build_id: UUID, db: Any) -> dict[str, Any]:
             f"{_API}/repos/{build.github_full_name}/actions/runs?per_page=1",
             headers=_headers(),
         )
+    if r.status_code == 401:
+        return {
+            "error": (
+                "GitHub token is invalid or expired (401). Update it in Admin → AI config → "
+                "GitHub repo token."
+            ),
+            "status": "auth_failed",
+            "repo": build.github_full_name,
+        }
     if r.status_code == 403:
         return {
             "error": (
@@ -200,7 +209,11 @@ async def get_qa_status(build_id: UUID, db: Any) -> dict[str, Any]:
             "repo": build.github_full_name,
         }
     if r.status_code != 200:
-        return {"error": f"Could not read CI runs ({r.status_code})"}
+        return {
+            "error": f"Could not read CI runs ({r.status_code}).",
+            "status": "error",
+            "repo": build.github_full_name,
+        }
     runs = r.json().get("workflow_runs") or []
     if not runs:
         return {"status": "no_runs", "message": "No CI run yet — it may take a minute to start."}

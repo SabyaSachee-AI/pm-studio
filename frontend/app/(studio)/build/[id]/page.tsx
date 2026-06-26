@@ -343,7 +343,7 @@ export default function BuildWorkspacePage() {
     if (!build?.github_full_name) return;
     void pollQa();
     if (build.status !== "qa") return;
-    if (qa?.status === "blocked") return;
+    if (qa?.status === "blocked" || qa?.status === "auth_failed" || qa?.status === "error") return;
     const t = setInterval(() => { void pollQa(); }, 6000);
     return () => clearInterval(t);
   }, [build?.github_full_name, build?.status, qa?.status, pollQa]);
@@ -598,7 +598,9 @@ export default function BuildWorkspacePage() {
       {/* CI / QA explainer — always tells you WHY this stage is where it is */}
       {build.github_full_name && (build.status === "qa" || build.status === "failed" || qa?.conclusion === "failure") ? (
         (() => {
-          const bad = qa?.status === "blocked" || qa?.conclusion === "failure" || build.status === "failed" || qa?.status === "no_runs";
+          const bad = qa?.status === "blocked" || qa?.status === "auth_failed" || qa?.status === "error"
+            || qa?.conclusion === "failure" || build.status === "failed" || qa?.status === "no_runs"
+            || (!!qa?.error && !qa?.conclusion);
           return (
             <div className={`rounded-lg border p-3 text-xs ${bad ? "border-amber-900/50 bg-amber-950/20" : "border-blue-900/40 bg-blue-950/20"}`}>
               <div className="flex items-start gap-2">
@@ -606,6 +608,19 @@ export default function BuildWorkspacePage() {
                 <div className="min-w-0 flex-1">
                   {!qa ? (
                     <p className="text-gray-300">Checking CI status on GitHub…</p>
+                  ) : qa.status === "auth_failed" ? (
+                    <>
+                      <p className="font-medium text-amber-300">GitHub token is invalid or expired (401) — that&apos;s why this stage is stuck.</p>
+                      <p className="mt-0.5 text-gray-400">
+                        The token no longer authenticates with GitHub (expired, revoked, or wrong value). PM Studio
+                        can&apos;t read CI — or push/deploy — until you set a valid token.
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <a href="/admin/ai-config" className="rounded border border-amber-700 px-2 py-1 text-amber-200 hover:bg-amber-950/40">Update token in Admin → AI config</a>
+                        <a href={`${build.repo_url}/actions`} target="_blank" rel="noreferrer" className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:bg-gray-800">Open Actions on GitHub</a>
+                        <button onClick={() => void handleMarkReady()} className="rounded border border-emerald-800 px-2 py-1 text-emerald-300 hover:bg-emerald-950/40">Mark ready &amp; continue</button>
+                      </div>
+                    </>
                   ) : qa.status === "blocked" ? (
                     <>
                       <p className="font-medium text-amber-300">CI status can&apos;t be read — that&apos;s why this stage is stuck.</p>
@@ -639,6 +654,15 @@ export default function BuildWorkspacePage() {
                         {qa.run_url ? <a href={qa.run_url} target="_blank" rel="noreferrer" className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:bg-gray-800">View run logs</a> : null}
                         {!isGenerating ? <button onClick={() => void handleRepair()} className="rounded border border-blue-800 px-2 py-1 text-blue-200 hover:bg-blue-950/40">Fix with AI &amp; re-push</button> : null}
                         <button onClick={() => void handleMarkReady()} className="rounded border border-emerald-800 px-2 py-1 text-emerald-300 hover:bg-emerald-950/40">Mark ready anyway</button>
+                      </div>
+                    </>
+                  ) : qa.status === "error" || (qa.error && !qa.conclusion && qa.status !== "queued" && qa.status !== "in_progress") ? (
+                    <>
+                      <p className="font-medium text-amber-300">Couldn&apos;t read CI status — that&apos;s why this stage is stuck.</p>
+                      <p className="mt-0.5 text-gray-400">GitHub returned an unexpected response. See the detail below, or check the run on GitHub.</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <a href={`${build.repo_url}/actions`} target="_blank" rel="noreferrer" className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:bg-gray-800">Open Actions on GitHub</a>
+                        <button onClick={() => void handleMarkReady()} className="rounded border border-emerald-800 px-2 py-1 text-emerald-300 hover:bg-emerald-950/40">Mark ready &amp; continue</button>
                       </div>
                     </>
                   ) : (
