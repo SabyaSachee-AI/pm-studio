@@ -434,10 +434,29 @@ function GithubSection() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
+  const [verifying, setVerifying] = useState(false);
+  const [verify, setVerify] = useState<{
+    ok: boolean;
+    login?: string | null;
+    token_type?: string;
+    checks?: Record<string, "pass" | "fail" | "unknown">;
+    message?: string;
+  } | null>(null);
 
   useEffect(() => {
     api.getGithubConfig().then((c) => { setCfg(c); setOwner(c.owner ?? ""); }).catch(() => {});
   }, []);
+
+  async function runVerify() {
+    setVerifying(true);
+    try {
+      setVerify(await api.verifyGithub());
+    } catch (e) {
+      setVerify({ ok: false, message: e instanceof Error ? e.message : "Verification failed" });
+    } finally {
+      setVerifying(false);
+    }
+  }
 
   async function save() {
     setSaving(true);
@@ -448,6 +467,9 @@ function GithubSection() {
       setToken("");
       setEditing(false);
       setMsg("Saved — restart not needed.");
+      // Validate the token's permissions immediately so problems surface here,
+      // not 20 minutes into a build.
+      await runVerify();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -517,8 +539,49 @@ function GithubSection() {
           >
             {saving ? "Saving…" : "Save"}
           </button>
+          {cfg?.configured ? (
+            <button
+              onClick={() => void runVerify()}
+              disabled={verifying}
+              className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-900 disabled:opacity-50"
+            >
+              {verifying ? "Verifying…" : "Verify token"}
+            </button>
+          ) : null}
           {msg ? <span className="text-xs text-gray-400">{msg}</span> : null}
         </div>
+
+        {verify ? (
+          <div className={`rounded border p-3 text-xs ${
+            verify.ok && !Object.values(verify.checks ?? {}).includes("fail")
+              ? "border-emerald-900/50 bg-emerald-950/20"
+              : "border-amber-900/50 bg-amber-950/20"
+          }`}>
+            <p className="mb-2 text-gray-300">{verify.message}</p>
+            {verify.checks ? (
+              <ul className="space-y-0.5">
+                {([
+                  ["auth", "Authentication"],
+                  ["contents", "Contents (read & write)"],
+                  ["workflows", "Workflows (read & write)"],
+                  ["actions_read", "Actions: Read (CI status)"],
+                ] as const).map(([key, label]) => {
+                  const v = verify.checks?.[key];
+                  if (!v) return null;
+                  const icon = v === "pass" ? "✓" : v === "fail" ? "✕" : "?";
+                  const cls = v === "pass" ? "text-emerald-400" : v === "fail" ? "text-red-400" : "text-gray-500";
+                  return (
+                    <li key={key} className="flex items-center gap-2">
+                      <span className={`font-bold ${cls}`}>{icon}</span>
+                      <span className="text-gray-400">{label}</span>
+                      {v === "unknown" ? <span className="text-gray-600">(can't verify without a pushed repo)</span> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </section>
   );

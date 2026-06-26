@@ -1333,6 +1333,16 @@ export class ApiClient {
       body: JSON.stringify({ token, owner }),
     });
   }
+  async verifyGithub(): Promise<{
+    ok: boolean;
+    login?: string | null;
+    token_type?: string;
+    scopes?: string[];
+    checks?: Record<string, "pass" | "fail" | "unknown">;
+    message?: string;
+  }> {
+    return this.request("/admin/ai-config/github/verify", { method: "POST" });
+  }
   async getVpsConfig(): Promise<{
     configured: boolean; host: string | null; user: string | null; path: string | null; has_key: boolean;
   }> {

@@ -190,6 +190,15 @@ async def get_qa_status(build_id: UUID, db: Any) -> dict[str, Any]:
             f"{_API}/repos/{build.github_full_name}/actions/runs?per_page=1",
             headers=_headers(),
         )
+    if r.status_code == 403:
+        return {
+            "error": (
+                "GitHub token cannot read Actions runs (403). Update Admin → AI config → "
+                "GitHub repo token: fine-grained PAT needs Actions → Read access on this repo."
+            ),
+            "status": "blocked",
+            "repo": build.github_full_name,
+        }
     if r.status_code != 200:
         return {"error": f"Could not read CI runs ({r.status_code})"}
     runs = r.json().get("workflow_runs") or []
@@ -213,6 +222,83 @@ async def get_qa_status(build_id: UUID, db: Any) -> dict[str, Any]:
     db.commit()
     return {"status": ci_status, "conclusion": conclusion,
             "run_url": run.get("html_url"), "quality_score": build.quality_score}
+
+
+async def verify_token(probe_repo: str | None = None) -> dict[str, Any]:
+    """Best-effort capability check for the configured GitHub token.
+
+    Catches the common failure modes *before* a build gets stranded:
+    bad token, or a fine-grained PAT missing Actions: Read / Contents / Workflows.
+    If ``probe_repo`` (an existing ``owner/name``) is given, the Actions: Read
+    permission is tested for real against it.
+    """
+    try:
+        token = _token()
+    except GitHubError as exc:
+        return {"ok": False, "message": str(exc), "checks": {}}
+
+    headers = _headers()
+    out: dict[str, Any] = {
+        "ok": False, "login": None, "token_type": "unknown",
+        "scopes": [], "checks": {}, "message": "",
+    }
+    async with httpx.AsyncClient(timeout=20) as client:
+        u = await client.get(f"{_API}/user", headers=headers)
+        if u.status_code != 200:
+            out["message"] = f"Token authentication failed ({u.status_code}). Check the PAT."
+            return out
+        out["ok"] = True
+        out["login"] = u.json().get("login")
+        scopes = [s.strip() for s in u.headers.get("X-OAuth-Scopes", "").split(",") if s.strip()]
+        out["scopes"] = scopes
+
+        if token.startswith("github_pat_"):
+            out["token_type"] = "fine_grained"
+        elif scopes:
+            out["token_type"] = "classic"
+
+        checks: dict[str, str] = {"auth": "pass"}
+        if out["token_type"] == "classic":
+            # Classic PAT: 'repo' covers contents + actions read; 'workflow' for CI files.
+            checks["contents"] = "pass" if "repo" in scopes else "fail"
+            checks["actions_read"] = "pass" if "repo" in scopes else "fail"
+            checks["workflows"] = "pass" if ("workflow" in scopes or "repo" in scopes) else "fail"
+        else:
+            # Fine-grained tokens don't expose scopes — verify against a repo if we can.
+            checks["contents"] = "unknown"
+            checks["actions_read"] = "unknown"
+            checks["workflows"] = "unknown"
+
+        if probe_repo:
+            ar = await client.get(
+                f"{_API}/repos/{probe_repo}/actions/runs?per_page=1", headers=headers
+            )
+            if ar.status_code == 200:
+                checks["actions_read"] = "pass"
+            elif ar.status_code == 403:
+                checks["actions_read"] = "fail"
+            cr = await client.get(f"{_API}/repos/{probe_repo}", headers=headers)
+            if cr.status_code == 200 and checks.get("contents") == "unknown":
+                checks["contents"] = "pass"
+
+        out["checks"] = checks
+
+    fails = [k for k, v in out["checks"].items() if v == "fail"]
+    if fails:
+        out["message"] = (
+            "Missing permissions: " + ", ".join(fails)
+            + ". A fine-grained PAT needs Contents: Read & write, Workflows: Read & write, "
+            "Actions: Read."
+        )
+    elif any(v == "unknown" for v in out["checks"].values()):
+        out["message"] = (
+            f"Authenticated as {out['login']}. Fine-grained token detected — make sure "
+            "Contents: Read & write, Workflows: Read & write, and Actions: Read are granted "
+            "(push a build to fully verify)."
+        )
+    else:
+        out["message"] = f"Authenticated as {out['login']}. All required permissions look good."
+    return out
 
 
 async def set_repo_secret(full_name: str, name: str, value: str) -> bool:

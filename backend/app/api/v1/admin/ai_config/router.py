@@ -410,6 +410,31 @@ async def set_github_config(
     return _github_status(org)
 
 
+@router.post("/github/verify")
+async def verify_github_config(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.studio_owner, UserRole.studio_admin)),
+) -> dict[str, Any]:
+    """Check the saved GitHub token's capabilities (auth + Actions/Contents/Workflows).
+
+    Probes Actions: Read against the most recent pushed build repo when available,
+    so the exact permission gap that strands builds is caught at save time.
+    """
+    org = await _get_org(db)  # noqa: F841 — ensures an org exists before probing
+    from app.models.build import Build  # noqa: PLC0415
+    from app.services.build.github import verify_token  # noqa: PLC0415
+
+    res = await db.execute(
+        select(Build)
+        .where(Build.deleted_at.is_(None), Build.github_full_name.is_not(None))
+        .order_by(Build.created_at.desc())
+        .limit(1)
+    )
+    latest = res.scalar_one_or_none()
+    probe = latest.github_full_name if latest else None
+    return await verify_token(probe)
+
+
 def _vps_status(org: Organization) -> VpsConfigStatus:
     cfg = (org.ai_provider_configs or {}).get("vps_deploy") or {}
     return VpsConfigStatus(
