@@ -15,7 +15,11 @@ import { ArchModelSelector } from "@/components/ui/ArchModelSelector";
 import { useAiJob } from "@/lib/hooks/useAiJob";
 import { downloadTextFile, slugFilename } from "@/lib/specMarkdown";
 
-const GENERATING = new Set(["scaffolding", "generating", "qa"]);
+// Only states where AI/Celery is actively producing code.
+// NOTE: `qa` is intentionally NOT here — during QA we're waiting on GitHub CI
+// (an HTTP poll), not AI generation. Treating it as "generating" caused the
+// stale "Generating code … QUEUED" bar and hid the action buttons.
+const GENERATING = new Set(["scaffolding", "generating"]);
 
 const STATUS_STYLE: Record<string, string> = {
   draft: "bg-gray-800 text-gray-400",
@@ -184,6 +188,19 @@ export default function BuildWorkspacePage() {
     }
   }
 
+  async function handleMarkReady() {
+    if (!window.confirm(
+      "Mark this build as ready?\n\nUse this when CI passed (or you verified the app locally) but PM Studio can't read the CI status — e.g. the GitHub token is missing Actions: Read.",
+    )) return;
+    setError("");
+    try {
+      await api.markBuildReady(id);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not mark ready");
+    }
+  }
+
   async function handleDeploy() {
     setError("");
     const input = window.prompt(
@@ -208,14 +225,16 @@ export default function BuildWorkspacePage() {
     } catch { /* not pushed yet */ }
   }, [id]);
 
-  // Poll CI status once pushed (status qa) until the run completes
+  // Poll CI status once pushed (status qa) until the run completes.
+  // Stop polling if CI is unreadable (blocked) — no point hammering a 403.
   useEffect(() => {
     if (!build?.github_full_name) return;
-    if (build.status !== "qa") { void pollQa(); return; }
     void pollQa();
+    if (build.status !== "qa") return;
+    if (qa?.status === "blocked") return;
     const t = setInterval(() => { void pollQa(); }, 6000);
     return () => clearInterval(t);
-  }, [build?.github_full_name, build?.status, pollQa]);
+  }, [build?.github_full_name, build?.status, qa?.status, pollQa]);
 
   async function handleSave() {
     if (!file) return;
@@ -407,19 +426,44 @@ export default function BuildWorkspacePage() {
           <a href={build.repo_url} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">
             <i className="ti ti-brand-github mr-1" aria-hidden />{build.github_full_name}
           </a>
-          {qa?.status ? (
+          {/* CI status — honest about what's actually happening */}
+          {qa?.status === "blocked" ? (
+            <span className="flex flex-wrap items-center gap-2 text-amber-300">
+              <i className="ti ti-alert-triangle" aria-hidden />
+              CI status unavailable — GitHub token is missing <b>Actions: Read</b>.
+              <a href="/admin/ai-config" className="underline hover:text-amber-200">Fix token</a>
+              {build.repo_url ? (
+                <a href={`${build.repo_url}/actions`} target="_blank" rel="noreferrer" className="underline hover:text-amber-200">Open Actions</a>
+              ) : null}
+            </span>
+          ) : qa?.status === "no_runs" ? (
+            <span className="flex items-center gap-1 text-gray-400">
+              <i className="ti ti-clock" aria-hidden /> {qa.message || "Waiting for CI to start…"}
+              {build.repo_url ? (
+                <a href={`${build.repo_url}/actions`} target="_blank" rel="noreferrer" className="ml-1 underline">Open Actions</a>
+              ) : null}
+            </span>
+          ) : qa?.status ? (
             <span className={
               qa.conclusion === "success" ? "text-emerald-400"
               : qa.conclusion === "failure" ? "text-red-400"
-              : "text-amber-400"
+              : "flex items-center gap-1 text-amber-400"
             }>
-              CI: {qa.conclusion ?? qa.status}
+              {qa.conclusion ? `CI: ${qa.conclusion}` : (
+                <><i className="ti ti-loader-2 animate-spin" aria-hidden /> CI running ({qa.status})</>
+              )}
               {qa.run_url ? <a href={qa.run_url} target="_blank" rel="noreferrer" className="ml-1 underline">view run</a> : null}
             </span>
           ) : qa?.message ? <span className="text-gray-500">{qa.message}</span> : null}
           {qa?.conclusion === "failure" && !isGenerating ? (
             <Button size="xs" onClick={() => void handleRepair()}>
               <i className="ti ti-sparkles mr-1" aria-hidden /> Fix with AI &amp; re-push
+            </Button>
+          ) : null}
+          {/* Manual override — a build must never be permanently stuck on qa */}
+          {build.status === "qa" && qa?.conclusion !== "success" && !isGenerating ? (
+            <Button size="xs" variant="outline" onClick={() => void handleMarkReady()}>
+              <i className="ti ti-circle-check mr-1" aria-hidden /> Mark ready
             </Button>
           ) : null}
           {(() => {

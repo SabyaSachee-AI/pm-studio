@@ -327,6 +327,33 @@ async def get_build_qa(
         sync_db.close()
 
 
+@router.post("/{build_id}/mark-ready", response_model=BuildResponse)
+async def mark_build_ready(
+    build_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> BuildResponse:
+    """Manual override: force the build to `ready`.
+
+    Escape hatch for when CI passed (or was verified locally) but PM Studio
+    cannot read the run — e.g. the GitHub token lacks Actions: Read. A build
+    must never get permanently stuck on `qa`.
+    """
+    build = await _load_build(build_id, db)
+    report = dict(build.quality_report or {})
+    report["manual_override"] = {
+        "status": "ready",
+        "by": str(current_user.id),
+        "at": datetime.now(timezone.utc).isoformat(),
+        "reason": "Marked ready manually (CI verified or skipped)",
+    }
+    build.quality_report = report
+    build.status = BuildStatus.ready
+    await db.commit()
+    await db.refresh(build)
+    return _to_response(build, await _file_count(build.id, db))
+
+
 @router.post("/{build_id}/polish", status_code=status.HTTP_202_ACCEPTED)
 async def polish_build_endpoint(
     build_id: UUID,
