@@ -212,14 +212,31 @@ _INVISIBLE = str.maketrans({
 })
 
 
+# C0 control characters that break compilers (keep tab \t, newline \n, CR \r).
+_CONTROL_CHARS = {c: None for c in range(0x20) if c not in (0x09, 0x0A, 0x0D)}
+_CONTROL_CHARS[0x7F] = None  # DEL
+
+
 def _sanitize_code(path: str, content: str) -> str:
     """Clean generated content before storing.
 
-    Removes invisible characters that break parsers (the "Invalid character"
-    class of CI failures) and strips an accidental wrapping markdown code fence
-    (```lang … ```) the model sometimes adds around a whole file.
+    Fixes the common ways a weaker model corrupts code-in-JSON:
+    - invisible chars (NBSP/zero-width/BOM) → removed ("Invalid character")
+    - C0 control chars (e.g. U+0008 backspace) → removed
+    - a file returned as ONE escaped blob (literal ``\\n``/``\\t`` and no real
+      newlines) → de-escaped back into real lines
+    - an accidental wrapping markdown code fence (```lang … ```) → stripped
     """
-    content = content.translate(_INVISIBLE)
+    content = content.translate(_INVISIBLE).translate(_CONTROL_CHARS)
+
+    # Whole file came back as a single escaped string (no real newlines but
+    # literal "\n"): decode the standard escapes back to real characters.
+    if "\n" not in content and "\\n" in content:
+        content = (
+            content.replace("\\r\\n", "\n").replace("\\n", "\n")
+            .replace("\\t", "\t").replace('\\"', '"').replace("\\'", "'")
+        )
+
     low = path.lower()
     if not (low.endswith(".md") or low.endswith(".mdx")):
         stripped = content.strip()
