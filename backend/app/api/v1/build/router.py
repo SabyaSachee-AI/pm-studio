@@ -421,6 +421,8 @@ async def generate_tests(
 @router.post("/{build_id}/repair", status_code=status.HTTP_202_ACCEPTED)
 async def repair_build(
     build_id: UUID,
+    model_provider: str | None = None,
+    model_id: str | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_screen_permission("tasks", "edit")),
 ) -> dict[str, str]:
@@ -428,7 +430,7 @@ async def repair_build(
     build = await _load_build(build_id, db)
     if not build.github_full_name:
         raise HTTPException(status_code=400, detail="Build not pushed to GitHub yet")
-    task = repair_build_task.delay(str(build.id))
+    task = repair_build_task.delay(str(build.id), model_provider=model_provider, model_id=model_id)
     build.generation_task_id = task.id
     await db.commit()
     return {"build_id": str(build.id), "task_id": task.id, "status": "repairing"}

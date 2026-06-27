@@ -110,10 +110,14 @@ async def push_build(build_id: UUID, db: Any, project_name: str) -> dict[str, An
     if not build:
         return {"error": "Build not found"}
 
-    # Guarantee the repo ships PM Studio's deterministic CI/CD workflows, never a
-    # model's variant (which could break CI, e.g. npm cache needing a lockfile).
-    from app.services.build.service import ensure_deterministic_workflows  # noqa: PLC0415
+    # Guarantee the repo ships PM Studio's deterministic CI/CD workflows + the
+    # Dockerfiles each app needs (a missing Dockerfile is the #1 smoke failure).
+    from app.services.build.service import (  # noqa: PLC0415
+        ensure_deterministic_dockerfiles,
+        ensure_deterministic_workflows,
+    )
     ensure_deterministic_workflows(db, build)
+    ensure_deterministic_dockerfiles(db, build)
     db.commit()
 
     files = (
@@ -484,8 +488,9 @@ def _distil_logs(raw: str, limit: int = 9000) -> str:
     return text[-limit:]
 
 
-async def get_run_logs(full_name: str, run_id: int | str) -> str:
-    """Download a completed run's logs (zip) and return distilled error text."""
+async def get_run_logs(full_name: str, run_id: int | str, distil: bool = True) -> str:
+    """Download a completed run's logs (zip). Returns distilled error text by
+    default, or the full joined log when ``distil=False`` (for structured parsing)."""
     async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
         r = await client.get(
             f"{_API}/repos/{full_name}/actions/runs/{run_id}/logs",
@@ -499,6 +504,7 @@ async def get_run_logs(full_name: str, run_id: int | str) -> str:
         for name in zf.namelist():
             if name.endswith(".txt"):
                 chunks.append(zf.read(name).decode("utf-8", "ignore"))
-        return _distil_logs("\n".join(chunks))
+        joined = "\n".join(chunks)
+        return _distil_logs(joined) if distil else joined
     except Exception:  # noqa: BLE001
         return ""

@@ -279,8 +279,16 @@ def polish_build_task(
 
 
 @celery_app.task(bind=True, name="build.repair")
-def repair_build_task(self, build_id: str) -> dict[str, Any]:
-    """One AI repair cycle from the failed CI logs, then re-push (triggers CI)."""
+def repair_build_task(
+    self, build_id: str,
+    model_provider: str | None = None, model_id: str | None = None,
+) -> dict[str, Any]:
+    """One AI repair cycle from the failed CI logs, then re-push (triggers CI).
+
+    Honors an optional model override so the user can run repair on a stronger
+    model (e.g. Claude) for accuracy, even while generation stays on the free chain.
+    """
+    set_model_override(model_provider, model_id)
     db = SyncSessionLocal()
     build: Build | None = None
     try:
@@ -402,6 +410,7 @@ def auto_ci_watch_task(self, build_id: str, polls: int = 0) -> dict[str, Any]:
         return {"error": str(exc)[:500]}
     finally:
         db.close()
+        clear_model_override()
 
 
 @celery_app.task(bind=True, name="build.generate_task")

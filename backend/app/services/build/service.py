@@ -446,6 +446,54 @@ jobs:
 """
 
 
+_BACKEND_DOCKERFILE = """FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 8000
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+"""
+
+_FRONTEND_DOCKERFILE = """FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build || true
+EXPOSE 3000
+CMD ["sh", "-c", "npm start || npm run dev"]
+"""
+
+
+def ensure_deterministic_dockerfiles(db: Session, build: Build) -> None:
+    """Inject standard Dockerfiles for any app whose manifest exists but whose
+    Dockerfile is missing — the #1 cause of the smoke test failing forever, since
+    AI repair almost never adds infrastructure files. Only fills gaps; never
+    overwrites a Dockerfile the model already wrote."""
+    paths = {
+        f.path.lstrip("/")
+        for f in db.query(GeneratedFile)
+        .filter(GeneratedFile.build_id == build.id, GeneratedFile.deleted_at.is_(None))
+        .all()
+    }
+
+    def have(p: str) -> bool:
+        return p in paths
+
+    # Backend (Python)
+    if have("backend/requirements.txt") and not have("backend/Dockerfile"):
+        _persist_file(db, build, "backend/Dockerfile", _BACKEND_DOCKERFILE, "docker", task_id=None)
+    elif have("requirements.txt") and not have("backend/requirements.txt") and not have("Dockerfile"):
+        _persist_file(db, build, "Dockerfile", _BACKEND_DOCKERFILE, "docker", task_id=None)
+
+    # Frontend (Node)
+    if have("frontend/package.json") and not have("frontend/Dockerfile"):
+        _persist_file(db, build, "frontend/Dockerfile", _FRONTEND_DOCKERFILE, "docker", task_id=None)
+    elif have("package.json") and not have("frontend/package.json") and not have("Dockerfile"):
+        _persist_file(db, build, "Dockerfile", _FRONTEND_DOCKERFILE, "docker", task_id=None)
+
+
 def ensure_deterministic_workflows(db: Session, build: Build) -> None:
     """Force PM Studio's CI/CD workflows into the build (overwriting any AI copy).
 
@@ -758,8 +806,9 @@ async def generate_build_code(build_id: UUID, db: Session, *, resume: bool = Fal
     db.commit()
     static = await _validate_and_repair(db, build)
 
-    # Re-assert PM Studio's CI/CD workflows (in case anything slipped in earlier).
+    # Re-assert PM Studio's CI/CD workflows + fill any missing Dockerfiles.
     ensure_deterministic_workflows(db, build)
+    ensure_deterministic_dockerfiles(db, build)
 
     report = dict(build.quality_report or {})
     report["static_check"] = static
@@ -859,9 +908,20 @@ REPAIR_SYSTEM = (
 )
 
 
+_REPAIR_BATCH = 3            # files per AI call (full content → reliable fixes)
+_REPAIR_THROTTLE_SEC = 2     # pause between calls to avoid 429 bursts
+
+
 async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -> dict[str, Any]:
-    """One repair cycle: pull failed CI logs, AI-fix files, re-push (triggers CI)."""
+    """One repair cycle that fixes EVERY file CI complained about.
+
+    Parses the CI log into a structured list of failing files, then fixes them in
+    small batches (full content per file → reliable), injects any missing infra
+    (Dockerfiles), runs the static gate, and re-pushes once. Records a repair
+    history so the UI can show what was fixed and what remains.
+    """
     from app.services.build.github import get_run_logs, push_build  # noqa: PLC0415
+    from app.services.build.ci_log_parser import parse_ci_failures  # noqa: PLC0415
 
     build = db.query(Build).filter(Build.id == build_id).first()
     if not build:
@@ -875,56 +935,113 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
     if attempts >= _MAX_REPAIR_ATTEMPTS:
         return {"error": f"Repair limit reached ({_MAX_REPAIR_ATTEMPTS}). Fix manually or regenerate."}
 
-    logs = ""
+    # Full logs (with file paths) for parsing + a distilled view for context.
+    raw = ""
     if build.github_full_name and ci.get("run_id"):
-        logs = await get_run_logs(build.github_full_name, ci["run_id"])
-    if not logs:
+        raw = await get_run_logs(build.github_full_name, ci["run_id"], distil=False)
+    if not raw:
         return {"error": "Could not read CI logs for this run"}
+    parsed = parse_ci_failures(raw)
+    distilled = _distil_ci(raw)
 
-    files = (
-        db.query(GeneratedFile)
+    # Layer A — fill infrastructure gaps deterministically (no AI).
+    ensure_deterministic_dockerfiles(db, build)
+    db.commit()
+
+    db_files = {
+        f.path.lstrip("/"): f
+        for f in db.query(GeneratedFile)
         .filter(GeneratedFile.build_id == build.id, GeneratedFile.deleted_at.is_(None))
         .all()
-    )
-    manifest = _manifest(files, limit=120)
+    }
+    # Match parsed failing paths to real DB files (keep order, de-dupe).
+    targets: list[str] = []
+    for p in parsed["files"]:
+        if p in db_files and p not in targets:
+            targets.append(p)
 
-    prompt = (
-        f"Project: {project_name}\n\n"
-        f"CI FAILED. Distilled logs:\n```\n{logs}\n```\n\n"
-        f"PROJECT FILES (paths + signatures):\n{manifest}\n\n"
-        "Return the corrected files (only those needing changes) in the files "
-        "array, each complete and runnable, so CI passes."
-    )
-    result = await ai_call(
-        prompt=prompt,
-        response_model=GeneratedFileSet,
-        system=REPAIR_SYSTEM,
-        max_tokens=14000,
-        task_type="code_generate",
-        screen="tasks",
-    )
+    manifest = _manifest(list(db_files.values()), limit=150)
     fixed = 0
-    for f in result.files:
-        if f.path and f.content.strip():
-            _persist_file(db, build, f.path, f.content, f.language,
-                          task_id=None, status=FileStatus.edited)
-            fixed += 1
 
+    for i in range(0, len(targets), _REPAIR_BATCH):
+        batch = targets[i:i + _REPAIR_BATCH]
+        blocks: list[str] = []
+        for p in batch:
+            errs = "; ".join(parsed["files"].get(p) or []) or "see CI log"
+            blocks.append(f"FILE: {p}\nCI ERRORS: {errs}\nCURRENT CONTENT:\n{db_files[p].content}")
+        prompt = (
+            f"Project: {project_name}\n\n"
+            f"Fix these files so CI passes. Return each corrected file COMPLETE and "
+            f"runnable, keeping imports/paths/signatures consistent with the project.\n\n"
+            f"PROJECT SIGNATURES (for correct imports):\n{manifest}\n\n"
+            f"CI LOG (distilled):\n```\n{distilled[:4000]}\n```\n\n"
+            + "\n\n".join(blocks)
+        )
+        try:
+            result = await ai_call(
+                prompt=prompt,
+                response_model=GeneratedFileSet,
+                system=REPAIR_SYSTEM,
+                max_tokens=14000,
+                task_type="code_generate",
+                screen="tasks",
+            )
+        except Exception as exc:  # noqa: BLE001 — one batch failing shouldn't abort the cycle
+            logger.warning("Repair batch failed: %s", exc)
+            continue
+        for ff in result.files:
+            if ff.path and ff.content.strip():
+                _persist_file(db, build, ff.path, ff.content, ff.language,
+                              task_id=None, status=FileStatus.edited)
+                fixed += 1
+        db.commit()
+        if i + _REPAIR_BATCH < len(targets):
+            await asyncio.sleep(_REPAIR_THROTTLE_SEC)  # throttle → fewer 429s
+
+    # Layer A — static gate (Python compile + JSON) catches/repairs more.
+    static = await _validate_and_repair(db, build)
+
+    # Record what happened so the UI can show progress.
     report["repair_attempts"] = attempts + 1
+    history = list(report.get("repair_history") or [])
+    history.append({
+        "attempt": attempts + 1,
+        "ci_run_id": ci.get("run_id"),
+        "files_targeted": len(targets),
+        "files_fixed": fixed,
+        "infra": parsed.get("infra") or [],
+        "static_auto_fixed": static.get("auto_fixed", 0),
+    })
+    report["repair_history"] = history[-12:]
+    report["repair_plan"] = {"targeted": targets, "fixed": fixed}
     build.quality_report = report
     db.commit()
 
-    if fixed == 0:
-        return {"error": "AI returned no fixes", "repair_attempts": attempts + 1}
+    if fixed == 0 and not parsed["infra"]:
+        return {"error": "Could not identify fixable files in the CI log",
+                "repair_attempts": attempts + 1}
 
     # Re-push the corrected codebase → triggers a fresh CI run.
     push_result = await push_build(build_id, db, project_name)
     return {
         "status": "repaired",
         "files_fixed": fixed,
+        "files_targeted": len(targets),
         "repair_attempts": attempts + 1,
         "push": push_result,
     }
+
+
+def _distil_ci(raw: str, limit: int = 8000) -> str:
+    """Keep the most relevant error lines from a full CI log (for prompt context)."""
+    lines = raw.splitlines()
+    flagged = [ln for ln in lines if any(
+        kw in ln.lower() for kw in ("error", "failed", "fail:", "✕", "exception",
+                                    "cannot find", "not found", "traceback", "syntaxerror",
+                                    "parsing error", "unmatched", "manifest unknown")
+    )]
+    picked = flagged if flagged else lines
+    return "\n".join(picked[-400:])[-limit:]
 
 
 # ── Stage 3: generate automated tests from acceptance criteria ───────────────

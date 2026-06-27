@@ -277,7 +277,7 @@ export default function BuildWorkspacePage() {
   async function handleRepair() {
     setError("");
     try {
-      const r = await api.repairBuild(id);
+      const r = await api.repairBuild(id, buildModel);
       attached.current.add(r.task_id);
       aiJob.startJob(r.task_id, "AI repairing from CI logs");
       await refresh();
@@ -636,6 +636,15 @@ export default function BuildWorkspacePage() {
                       );
                     }
                     return null;
+                  })()}
+                  {(() => {
+                    const plan = (build.quality_report as Record<string, unknown> | null)?.repair_plan as { targeted?: string[]; fixed?: number } | undefined;
+                    if (!plan || !plan.targeted?.length) return null;
+                    return (
+                      <p className="mb-1.5 text-[11px] text-gray-500">
+                        Last repair pass: fixed {plan.fixed ?? 0} of {plan.targeted.length} flagged file(s).
+                      </p>
+                    );
                   })()}
                   {!qa ? (
                     <p className="text-gray-300">Checking CI status on GitHub…</p>

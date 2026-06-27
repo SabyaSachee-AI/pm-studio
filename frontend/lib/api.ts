@@ -1109,9 +1109,9 @@ export class ApiClient {
   }> {
     return this.request(`/builds/${id}/qa`);
   }
-  async repairBuild(id: string) {
+  async repairBuild(id: string, model?: ModelChoice | null) {
     return this.request<{ build_id: string; task_id: string; status: string }>(
-      `/builds/${id}/repair`, { method: "POST" });
+      `/builds/${id}/repair${this.modelQS(model)}`, { method: "POST" });
   }
   async markBuildReady(id: string): Promise<BuildSummary> {
     return this.request(`/builds/${id}/mark-ready`, { method: "POST" });
