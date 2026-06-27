@@ -506,13 +506,87 @@ CMD ["sh", "-c", "npm start || npm run dev"]
 """
 
 
-def ensure_deterministic_dockerfiles(db: Session, build: Build) -> None:
-    """Inject Dockerfiles wherever they are needed but missing — the #1 cause of
-    the smoke test failing forever, since AI repair almost never adds infra files.
+def _norm_compose_path(raw: str) -> str:
+    p = raw.strip().strip('"\'').strip()
+    if p in (".", "./"):
+        return ""
+    return p.strip("./").rstrip("/")
 
-    Two passes: (1) honor what docker-compose.yml's build contexts expect, so the
-    Dockerfile lands where compose looks for it; (2) a standard backend/frontend
-    fallback. Only fills gaps — never overwrites a Dockerfile the model wrote.
+
+def _dockerfile_paths_from_compose(content: str) -> list[str]:
+    """Resolve every Dockerfile path docker-compose expects (repo-relative)."""
+    paths: set[str] = set()
+    contexts: set[str] = set()
+
+    for m in re.finditer(r"context:\s*[\"']?([^\s\"'#]+)", content, re.I):
+        val = m.group(1)
+        if val.startswith("${"):
+            continue
+        contexts.add(_norm_compose_path(val))
+
+    for m in re.finditer(
+        r"build:\s*[\"']?(\./[^\s\"'#]+|\.)\s*[\"']?",
+        content,
+    ):
+        val = m.group(1)
+        if val.startswith("${"):
+            continue
+        contexts.add(_norm_compose_path(val))
+
+    for ctx in contexts:
+        paths.add("Dockerfile" if ctx == "" else f"{ctx}/Dockerfile")
+
+    for m in re.finditer(r"dockerfile:\s*[\"']?([^\s\"'#]+)", content, re.I):
+        df = _norm_compose_path(m.group(1))
+        if df.startswith("${"):
+            continue
+        # dockerfile: Dockerfile with context: ./backend → backend/Dockerfile
+        if df.lower() == "dockerfile":
+            continue
+        if "/" in df:
+            paths.add(df)
+        else:
+            # Relative to nearest context — inject at every context if ambiguous.
+            for ctx in contexts or {""}:
+                paths.add(f"{ctx}/{df}".strip("/") if ctx else df)
+
+    return sorted(paths)
+
+
+def _dockerfile_path_for_service(compose: str, service: str) -> str | None:
+    """Best-effort: map a docker-compose service name to its Dockerfile path."""
+    block = re.search(
+        rf"^\s*{re.escape(service)}:\s*\n(.*?)(?=^\S|\Z)",
+        compose,
+        re.M | re.S,
+    )
+    if not block:
+        return None
+    chunk = block.group(1)
+    ctx = ""
+    df = "Dockerfile"
+    cm = re.search(r"context:\s*[\"']?([^\s\"'#]+)", chunk, re.I)
+    if cm:
+        ctx = _norm_compose_path(cm.group(1))
+    dm = re.search(r"dockerfile:\s*[\"']?([^\s\"'#]+)", chunk, re.I)
+    if dm:
+        df = _norm_compose_path(dm.group(1))
+    bm = re.search(r"build:\s*[\"']?(\./[^\s\"'#]+|\.|[^\s\"'#]+)[\"']?", chunk)
+    if bm and not cm:
+        ctx = _norm_compose_path(bm.group(1))
+    if df.lower() == "dockerfile":
+        return "Dockerfile" if ctx == "" else f"{ctx}/Dockerfile"
+    if "/" in df:
+        return df
+    return f"{ctx}/{df}".strip("/") if ctx else df
+
+
+def ensure_deterministic_dockerfiles(
+    db: Session, build: Build, *, service_hints: list[str] | None = None,
+) -> int:
+    """Inject Dockerfiles wherever compose/CI expect them but files are missing.
+
+    Returns the number of Dockerfiles newly injected.
     """
     by_path = {
         f.path.lstrip("/"): f
@@ -521,15 +595,18 @@ def ensure_deterministic_dockerfiles(db: Session, build: Build) -> None:
         .all()
     }
     present = set(by_path)
+    injected = 0
 
     def have(p: str) -> bool:
         return p in present
 
     def inject(path: str, tpl: str) -> None:
+        nonlocal injected
         if path in present:
             return
         _persist_file(db, build, path, tpl, "docker", task_id=None)
         present.add(path)
+        injected += 1
 
     def template_for(base: str) -> str | None:
         b = base.strip().strip("./").rstrip("/")
@@ -541,28 +618,33 @@ def ensure_deterministic_dockerfiles(db: Session, build: Build) -> None:
             return _FRONTEND_DOCKERFILE
         return None
 
-    # Pass 1 — compose-driven: a Dockerfile at each declared build context.
+    needed: set[str] = set()
+
     compose = by_path.get("docker-compose.yml") or by_path.get("docker-compose.yaml")
     if compose is not None:
-        contexts = re.findall(r'context:\s*["\']?([^\s"\'#]+)', compose.content)
-        if not contexts and re.search(r'build:\s*["\']?\.', compose.content):
-            contexts = ["."]
-        for ctx in contexts:
-            b = ctx.strip().strip("./").rstrip("/")
-            dpath = f"{b}/Dockerfile".lstrip("/") if b else "Dockerfile"
-            tpl = template_for(b)
-            if tpl:
-                inject(dpath, tpl)
+        needed.update(_dockerfile_paths_from_compose(compose.content))
+        for hint in service_hints or []:
+            p = _dockerfile_path_for_service(compose.content, hint)
+            if p:
+                needed.add(p)
 
     # Pass 2 — standard layout fallback.
     if have("backend/requirements.txt"):
-        inject("backend/Dockerfile", _BACKEND_DOCKERFILE)
+        needed.add("backend/Dockerfile")
     elif have("requirements.txt") and not have("backend/requirements.txt"):
-        inject("Dockerfile", _BACKEND_DOCKERFILE)
+        needed.add("Dockerfile")
     if have("frontend/package.json"):
-        inject("frontend/Dockerfile", _FRONTEND_DOCKERFILE)
+        needed.add("frontend/Dockerfile")
     elif have("package.json") and not have("frontend/package.json"):
-        inject("Dockerfile", _FRONTEND_DOCKERFILE)
+        needed.add("Dockerfile")
+
+    for dpath in sorted(needed):
+        base = dpath.rsplit("/", 1)[0] if "/" in dpath else ""
+        tpl = template_for(base)
+        if tpl:
+            inject(dpath, tpl)
+
+    return injected
 
 
 def ensure_deterministic_workflows(db: Session, build: Build) -> None:
@@ -999,24 +1081,48 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
         return {"error": "Build not found"}
     report = dict(build.quality_report or {})
     ci = report.get("ci") or {}
+    attempts = int(report.get("repair_attempts") or 0)
+
+    def _save_plan(targets: list[str], fixed: int, *, note: str = "") -> None:
+        plan: dict[str, Any] = {"targeted": targets, "fixed": fixed}
+        if note:
+            plan["note"] = note
+        report["repair_plan"] = plan
+        build.quality_report = report
+        db.commit()
+
     if ci.get("conclusion") != "failure":
+        _save_plan([], 0, note="Latest CI run is not a failure")
         return {"error": "Latest CI run is not a failure — nothing to repair"}
 
-    attempts = int(report.get("repair_attempts") or 0)
     if attempts >= _MAX_REPAIR_ATTEMPTS:
+        _save_plan([], 0, note=f"Repair limit reached ({_MAX_REPAIR_ATTEMPTS})")
         return {"error": f"Repair limit reached ({_MAX_REPAIR_ATTEMPTS}). Fix manually or regenerate."}
+
+    _save_plan([], 0, note="Repair cycle started")
 
     # Full logs (with file paths) for parsing + a distilled view for context.
     raw = ""
     if build.github_full_name and ci.get("run_id"):
         raw = await get_run_logs(build.github_full_name, ci["run_id"], distil=False)
+        if not raw:
+            await asyncio.sleep(5)
+            raw = await get_run_logs(build.github_full_name, ci["run_id"], distil=False)
     if not raw:
+        _save_plan([], 0, note="Could not read CI logs")
         return {"error": "Could not read CI logs for this run"}
     parsed = parse_ci_failures(raw)
     distilled = _distil_ci(raw)
 
+    service_hints: list[str] = []
+    for item in parsed.get("infra") or []:
+        if isinstance(item, dict) and item.get("service"):
+            service_hints.append(str(item["service"]))
+
     # Layer A — fill infrastructure gaps deterministically (no AI).
-    ensure_deterministic_dockerfiles(db, build)
+    docker_injected = ensure_deterministic_dockerfiles(
+        db, build, service_hints=service_hints or None,
+    )
     db.commit()
 
     db_files = {
@@ -1090,6 +1196,12 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
     # Layer A — static gate (Python compile + JSON) catches/repairs more.
     static = await _validate_and_repair(db, build)
 
+    # Re-inject Dockerfiles after AI edits (models sometimes overwrite compose).
+    docker_injected += ensure_deterministic_dockerfiles(
+        db, build, service_hints=service_hints or None,
+    )
+    db.commit()
+
     # Record what happened so the UI can show progress.
     report["repair_attempts"] = attempts + 1
     history = list(report.get("repair_history") or [])
@@ -1099,19 +1211,31 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
         "files_targeted": len(targets),
         "files_fixed": fixed,
         "infra": parsed.get("infra") or [],
+        "docker_injected": docker_injected,
         "static_auto_fixed": static.get("auto_fixed", 0),
     })
     report["repair_history"] = history[-12:]
-    report["repair_plan"] = {"targeted": targets, "fixed": fixed}
+    report["repair_plan"] = {"targeted": targets, "fixed": fixed, "docker_injected": docker_injected}
     build.quality_report = report
     db.commit()
 
-    if fixed == 0 and not parsed["infra"]:
+    has_infra = bool(parsed.get("infra")) or docker_injected > 0
+    if fixed == 0 and not has_infra:
         return {"error": "Could not identify fixable files in the CI log",
-                "repair_attempts": attempts + 1}
+                "repair_attempts": attempts + 1,
+                "files_targeted": len(targets)}
 
     # Re-push the corrected codebase → triggers a fresh CI run.
     push_result = await push_build(build_id, db, project_name)
+    if isinstance(push_result, dict) and push_result.get("error"):
+        build.last_error = str(push_result["error"])[:500]
+        db.commit()
+        return {
+            "error": push_result["error"],
+            "files_fixed": fixed,
+            "files_targeted": len(targets),
+            "repair_attempts": attempts + 1,
+        }
     return {
         "status": "repaired",
         "files_fixed": fixed,

@@ -8,6 +8,7 @@ or persistent workdir needed — the backend stays stateless. Pushing the scaffo
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import logging
@@ -106,9 +107,24 @@ async def _ensure_repo(client: httpx.AsyncClient, owner: str, name: str) -> dict
 
 async def push_build(build_id: UUID, db: Any, project_name: str) -> dict[str, Any]:
     """Push every generated file to GitHub in one commit. Triggers CI."""
+    from app.services.build.push_lock import build_push_lock  # noqa: PLC0415
+
     build = db.query(Build).filter(Build.id == build_id).first()
     if not build:
         return {"error": "Build not found"}
+
+    with build_push_lock(str(build_id)) as locked:
+        if not locked:
+            return {
+                "error": "Another push is in progress for this build — try again shortly.",
+            }
+        return await _push_build_locked(build_id, db, project_name, build)
+
+
+async def _push_build_locked(
+    build_id: UUID, db: Any, project_name: str, build: Build,
+) -> dict[str, Any]:
+    """Inner push implementation — caller must hold the build push lock."""
 
     # Guarantee the repo ships PM Studio's deterministic CI/CD workflows + the
     # Dockerfiles each app needs (a missing Dockerfile is the #1 smoke failure).
@@ -135,15 +151,7 @@ async def push_build(build_id: UUID, db: Any, project_name: str) -> dict[str, An
         full_name = repo["full_name"]
         branch = repo.get("default_branch") or "main"
 
-        # Base ref + tree
-        ref = await client.get(f"{_API}/repos/{full_name}/git/ref/heads/{branch}", headers=_headers())
-        if ref.status_code != 200:
-            raise GitHubError(f"Could not read base ref ({ref.status_code}): {ref.text[:200]}")
-        base_sha = ref.json()["object"]["sha"]
-        base_commit = await client.get(f"{_API}/repos/{full_name}/git/commits/{base_sha}", headers=_headers())
-        base_tree = base_commit.json()["tree"]["sha"]
-
-        # Blobs
+        # Upload blobs once (expensive); re-base tree/commit if another push landed first.
         tree_items: list[dict[str, Any]] = []
         pushed_paths: set[str] = set()
         for f in files:
@@ -160,49 +168,69 @@ async def push_build(build_id: UUID, db: Any, project_name: str) -> dict[str, An
             tree_items.append({"path": p, "mode": _GIT_MODE_FILE,
                                "type": "blob", "sha": blob.json()["sha"]})
 
-        # Purge stray workflow files: the push is additive (base_tree retained),
-        # so a model's leftover .github/workflows/* would otherwise keep running.
-        # Delete any workflow file in the repo that we are not pushing ourselves.
-        rt = await client.get(
-            f"{_API}/repos/{full_name}/git/trees/{base_tree}?recursive=1", headers=_headers()
-        )
-        if rt.status_code == 200:
-            for entry in rt.json().get("tree", []):
-                ep = entry.get("path", "")
-                if (entry.get("type") == "blob"
-                        and ep.startswith(".github/workflows/")
-                        and ep not in pushed_paths):
-                    tree_items.append({"path": ep, "mode": _GIT_MODE_FILE,
-                                       "type": "blob", "sha": None})  # None = delete
+        commit_sha: str | None = None
+        max_attempts = 6
+        for attempt in range(max_attempts):
+            ref = await client.get(f"{_API}/repos/{full_name}/git/ref/heads/{branch}", headers=_headers())
+            if ref.status_code != 200:
+                raise GitHubError(f"Could not read base ref ({ref.status_code}): {ref.text[:200]}")
+            base_sha = ref.json()["object"]["sha"]
+            base_commit = await client.get(f"{_API}/repos/{full_name}/git/commits/{base_sha}", headers=_headers())
+            base_tree = base_commit.json()["tree"]["sha"]
 
-        # Tree → commit → move ref
-        tree = await client.post(
-            f"{_API}/repos/{full_name}/git/trees",
-            headers=_headers(),
-            json={"base_tree": base_tree, "tree": tree_items},
-        )
-        if tree.status_code not in (200, 201):
-            raise GitHubError(f"Tree creation failed ({tree.status_code}): {tree.text[:200]}")
-        commit = await client.post(
-            f"{_API}/repos/{full_name}/git/commits",
-            headers=_headers(),
-            json={"message": f"PM Studio: generated codebase ({len(files)} files)",
-                  "tree": tree.json()["sha"], "parents": [base_sha]},
-        )
-        if commit.status_code not in (200, 201):
-            raise GitHubError(f"Commit failed ({commit.status_code}): {commit.text[:200]}")
-        upd = await client.patch(
-            f"{_API}/repos/{full_name}/git/refs/heads/{branch}",
-            headers=_headers(),
-            json={"sha": commit.json()["sha"], "force": False},
-        )
-        if upd.status_code not in (200, 201):
+            # Purge stray workflow files on the current base tree.
+            items = list(tree_items)
+            rt = await client.get(
+                f"{_API}/repos/{full_name}/git/trees/{base_tree}?recursive=1", headers=_headers()
+            )
+            if rt.status_code == 200:
+                for entry in rt.json().get("tree", []):
+                    ep = entry.get("path", "")
+                    if (entry.get("type") == "blob"
+                            and ep.startswith(".github/workflows/")
+                            and ep not in pushed_paths):
+                        items.append({"path": ep, "mode": _GIT_MODE_FILE,
+                                      "type": "blob", "sha": None})
+
+            tree = await client.post(
+                f"{_API}/repos/{full_name}/git/trees",
+                headers=_headers(),
+                json={"base_tree": base_tree, "tree": items},
+            )
+            if tree.status_code not in (200, 201):
+                raise GitHubError(f"Tree creation failed ({tree.status_code}): {tree.text[:200]}")
+            commit = await client.post(
+                f"{_API}/repos/{full_name}/git/commits",
+                headers=_headers(),
+                json={"message": f"PM Studio: generated codebase ({len(files)} files)",
+                      "tree": tree.json()["sha"], "parents": [base_sha]},
+            )
+            if commit.status_code not in (200, 201):
+                raise GitHubError(f"Commit failed ({commit.status_code}): {commit.text[:200]}")
+            commit_sha = commit.json()["sha"]
+            upd = await client.patch(
+                f"{_API}/repos/{full_name}/git/refs/heads/{branch}",
+                headers=_headers(),
+                json={"sha": commit_sha, "force": False},
+            )
+            if upd.status_code in (200, 201):
+                break
+            if upd.status_code == 422 and attempt < max_attempts - 1:
+                logger.warning(
+                    "Push 422 non-fast-forward for %s (attempt %s/%s) — re-basing",
+                    full_name, attempt + 1, max_attempts,
+                )
+                await asyncio.sleep(min(0.5 * (2 ** attempt), 4))
+                continue
             raise GitHubError(f"Ref update failed ({upd.status_code}): {upd.text[:200]}")
+        if not commit_sha:
+            raise GitHubError("Ref update failed after retry")
 
     build.repo_url = repo["html_url"]
     build.github_full_name = full_name
     build.default_branch = branch
     build.status = BuildStatus.qa
+    build.last_error = None
     db.commit()
     return {"status": "pushed", "repo_url": repo["html_url"], "full_name": full_name, "files": len(files)}
 
@@ -360,6 +388,12 @@ async def pull_build_from_github(build_id: UUID, db: Any) -> dict[str, Any]:
         "added": added, "updated": updated, "removed": removed, "source": "github",
     }
     build.quality_report = report
+    from app.services.build.service import (  # noqa: PLC0415
+        ensure_deterministic_dockerfiles,
+        ensure_deterministic_workflows,
+    )
+    ensure_deterministic_workflows(db, build)
+    ensure_deterministic_dockerfiles(db, build)
     db.commit()
     return {"status": "synced", "added": added, "updated": updated,
             "removed": removed, "total": len(repo_files)}

@@ -39,9 +39,32 @@ celery_app.conf.update(
     # Long-running code builds go to a dedicated queue so they never block PRD/SRS/
     # architecture jobs. Run a second worker for it:
     #   celery -A app.core.celery_app worker -Q build --pool=solo -n build@%h
+    # Run exactly ONE build worker locally — a second terminal with the same -n causes 422 push races.
     # The default worker still serves everything else (the "celery" queue).
     task_routes={"build.*": {"queue": "build"}},
     task_default_queue="celery",
 )
 
 celery_app.autodiscover_tasks(["app.workers"])
+
+
+@celery_app.on_after_configure.connect
+def _register_worker_hooks(**kwargs: object) -> None:
+    from celery.signals import worker_ready  # noqa: PLC0415
+
+    @worker_ready.connect
+    def _resume_auto_ci_on_build_worker_start(sender=None, **kw: object) -> None:
+        """Resume orphaned auto-CI watchers when the build queue worker starts."""
+        try:
+            queues = {q.name for q in sender.consumer.task_queues}  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001
+            return
+        if "build" not in queues:
+            return
+        from app.workers.build_tasks import resume_orphaned_auto_ci  # noqa: PLC0415
+
+        n = resume_orphaned_auto_ci()
+        if n:
+            import logging  # noqa: PLC0415
+
+            logging.getLogger(__name__).info("Resumed %s orphaned auto-CI watcher(s)", n)

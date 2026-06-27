@@ -348,16 +348,17 @@ export default function BuildWorkspacePage() {
     } catch { /* not pushed yet */ }
   }, [id, refresh]);
 
-  // Poll CI status once pushed (status qa) until the run completes.
-  // Stop polling if CI is unreadable (blocked) — no point hammering a 403.
+  // Poll CI while QA is running, CI failed, or auto-repair is active.
   useEffect(() => {
     if (!build?.github_full_name) return;
+    const auto = (build.quality_report as Record<string, unknown> | null)?.auto_ci as { phase?: string } | undefined;
+    const autoActive = ["watching", "repairing", "repushed"].includes(auto?.phase || "");
     void pollQa();
-    if (build.status !== "qa") return;
+    if (build.status !== "qa" && build.status !== "failed" && !autoActive) return;
     if (qa?.status === "blocked" || qa?.status === "auth_failed" || qa?.status === "error") return;
     const t = setInterval(() => { void pollQa(); }, 6000);
     return () => clearInterval(t);
-  }, [build?.github_full_name, build?.status, qa?.status, pollQa]);
+  }, [build?.github_full_name, build?.status, build?.quality_report, qa?.status, pollQa]);
 
   async function handleSave() {
     if (!file) return;
@@ -638,14 +639,35 @@ export default function BuildWorkspacePage() {
                     return null;
                   })()}
                   {(() => {
-                    const plan = (build.quality_report as Record<string, unknown> | null)?.repair_plan as { targeted?: string[]; fixed?: number } | undefined;
-                    if (!plan || !plan.targeted?.length) return null;
-                    return (
-                      <p className="mb-1.5 text-[11px] text-gray-500">
-                        Last repair pass: fixed {plan.fixed ?? 0} of {plan.targeted.length} flagged file(s).
-                      </p>
-                    );
+                    const plan = (build.quality_report as Record<string, unknown> | null)?.repair_plan as { targeted?: string[]; fixed?: number; note?: string; docker_injected?: number } | undefined;
+                    const history = (build.quality_report as Record<string, unknown> | null)?.repair_history as Array<{ attempt?: number; files_targeted?: number; files_fixed?: number; docker_injected?: number }> | undefined;
+                    if (plan?.targeted?.length) {
+                      return (
+                        <p className="mb-1.5 text-[11px] text-gray-500">
+                          Last repair pass: fixed {plan.fixed ?? 0} of {plan.targeted.length} flagged file(s)
+                          {plan.docker_injected ? ` · ${plan.docker_injected} Dockerfile(s) injected` : ""}.
+                        </p>
+                      );
+                    }
+                    if (plan?.note) {
+                      return <p className="mb-1.5 text-[11px] text-gray-500">{plan.note}</p>;
+                    }
+                    if (history?.length) {
+                      const last = history[history.length - 1];
+                      return (
+                        <p className="mb-1.5 text-[11px] text-gray-500">
+                          Repair attempt {last.attempt}: targeted {last.files_targeted ?? 0}, fixed {last.files_fixed ?? 0}
+                          {last.docker_injected ? `, ${last.docker_injected} Dockerfile(s) injected` : ""}.
+                        </p>
+                      );
+                    }
+                    return null;
                   })()}
+                  {build.last_error ? (
+                    <p className="mb-1.5 rounded bg-red-950/30 px-2 py-1 text-[11px] text-red-300">
+                      Last error: {build.last_error}
+                    </p>
+                  ) : null}
                   {!qa ? (
                     <p className="text-gray-300">Checking CI status on GitHub…</p>
                   ) : qa.status === "auth_failed" ? (
@@ -692,7 +714,9 @@ export default function BuildWorkspacePage() {
                       <p className="mt-0.5 text-gray-400">A test or build step failed on GitHub. Open the run logs, or let AI read the logs and fix + re-push.</p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {qa.run_url ? <a href={qa.run_url} target="_blank" rel="noreferrer" className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:bg-gray-800">View run logs</a> : null}
-                        {!isGenerating ? <button onClick={() => void handleRepair()} className="rounded border border-blue-800 px-2 py-1 text-blue-200 hover:bg-blue-950/40">Fix with AI &amp; re-push</button> : null}
+                        {!isGenerating && !["watching", "repairing", "repushed"].includes(((build.quality_report as Record<string, unknown> | null)?.auto_ci as { phase?: string } | undefined)?.phase || "") ? (
+                          <button onClick={() => void handleRepair()} className="rounded border border-blue-800 px-2 py-1 text-blue-200 hover:bg-blue-950/40">Fix with AI &amp; re-push</button>
+                        ) : null}
                         <button onClick={() => void handleMarkReady()} className="rounded border border-emerald-800 px-2 py-1 text-emerald-300 hover:bg-emerald-950/40">Mark ready anyway</button>
                       </div>
                     </>
