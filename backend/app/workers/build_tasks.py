@@ -177,6 +177,12 @@ def push_build_to_github_task(self, build_id: str) -> dict[str, Any]:
         if not build:
             return {"error": "Build not found"}
         build.generation_task_id = self.request.id
+        # A user-initiated push is a fresh start: reset the auto-repair budget and
+        # clear any "auto-repair stopped" notice so the loop can try again.
+        report = dict(build.quality_report or {})
+        report["repair_attempts"] = 0
+        report.pop("auto_ci", None)
+        build.quality_report = report
         db.commit()
         result = _run_async(push_build(UUID(build_id), db, _project_info(db, build)["name"]))
         # Kick off the autonomous CI loop: watch CI → on failure AI-repair + re-push,
@@ -285,10 +291,19 @@ def repair_build_task(self, build_id: str) -> dict[str, Any]:
         if not build:
             return {"error": "Build not found"}
         build.generation_task_id = self.request.id
+        # Manual "Fix with AI" = user intent → give a fresh repair budget even if
+        # the auto-loop had stopped at the limit.
+        report = dict(build.quality_report or {})
+        report["repair_attempts"] = 0
+        build.quality_report = report
         db.commit()
-        return _run_async(
+        result = _run_async(
             repair_build_from_ci(UUID(build_id), db, _project_info(db, build)["name"])
         )
+        # Resume the autonomous watcher after a manual fix re-push.
+        if isinstance(result, dict) and result.get("status") == "repaired":
+            auto_ci_watch_task.apply_async((build_id, 0), countdown=30, queue="build")
+        return result
     except Exception as exc:  # noqa: BLE001
         logger.exception("CI repair failed")
         if build is not None:
