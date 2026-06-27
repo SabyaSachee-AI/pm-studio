@@ -15,6 +15,8 @@ export type AiStatusBarProps = {
   currentModel?: string;
   phase?: string;
   attempt?: number;
+  /** Short instruction telling the user what to do once this finishes. */
+  nextStep?: string;
   onCancel?: () => void;
   onTryAgain?: () => void;
 };
@@ -72,6 +74,7 @@ export function AiStatusBar({
   currentModel,
   phase,
   attempt,
+  nextStep,
   onCancel,
   onTryAgain,
 }: AiStatusBarProps) {
@@ -125,12 +128,19 @@ export function AiStatusBar({
 
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
         <span>⏱ {formatElapsed(elapsedSeconds)}</span>
-        {currentModel ? <span>🤖 {currentModel}</span> : null}
+        <span>🤖 {currentModel || "Auto (best available)"}</span>
         {attempt != null && attempt > 0 ? <span>↻ Model #{attempt}</span> : null}
         {(tokenCount ?? 0) > 0 ? (
           <span>🔤 {tokenCount!.toLocaleString()} tokens</span>
         ) : null}
       </div>
+
+      {/* Clear "it's alive" reassurance so the user knows work is happening */}
+      {status === "processing" || status === "pending" ? (
+        <p className="mt-2 text-xs text-blue-300">
+          🔄 Working… {formatElapsed(elapsedSeconds)} elapsed — this runs in the background; large projects can take several minutes.
+        </p>
+      ) : null}
 
       {phaseText && (status === "pending" || status === "processing") ? (
         <p className="mt-2 text-xs text-amber-400/90">{phaseText}</p>
@@ -149,6 +159,13 @@ export function AiStatusBar({
 
       {status === "failed" && errorMessage ? (
         <p className="mt-2 text-xs text-red-300">{errorMessage}</p>
+      ) : null}
+
+      {/* What to do next — so the user always knows the following step/button */}
+      {nextStep && status !== "failed" ? (
+        <p className="mt-2 rounded bg-gray-800/70 px-2 py-1 text-xs text-gray-300">
+          <span className="font-medium text-gray-400">{status === "completed" ? "Next step:" : "After this:"}</span> {nextStep}
+        </p>
       ) : null}
 
       <div className="mt-3 flex flex-wrap gap-2">

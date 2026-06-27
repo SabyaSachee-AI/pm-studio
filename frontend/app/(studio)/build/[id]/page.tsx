@@ -710,14 +710,30 @@ export default function BuildWorkspacePage() {
         })()
       ) : null}
 
-      {isGenerating || aiJob.isVisible ? (
-        <AiStatusBar
-          {...aiJobStatusBarProps(aiJob)}
-          operationName={aiJob.operationName || "Generating code"}
-          processingMessage={liveMessage}
-          onCancel={aiJob.cancel}
-        />
-      ) : null}
+      {isGenerating || aiJob.isVisible ? (() => {
+        const barProps = aiJobStatusBarProps(aiJob);
+        const selectedModel = buildModel ? `${buildModel.provider} / ${buildModel.model}` : "Auto (best free model)";
+        const op = (aiJob.operationName || "").toLowerCase();
+        const nextStep =
+          op.includes("scaffold") ? "When done, click ‘2 Generate code’."
+          : op.includes("test") ? "When done, click ‘5 Push to GitHub’ — CI will run these tests."
+          : op.includes("polish") ? "When done, click ‘5 Push to GitHub’."
+          : op.includes("generat") ? "When done, click ‘5 Push to GitHub’ (optionally ‘3 Polish’ / ‘4 Generate tests’ first)."
+          : op.includes("push") ? "CI runs automatically after the push — PM Studio auto-repairs failures, just watch."
+          : op.includes("deploy") ? "After deploy, open the live URL on the GitHub row."
+          : op.includes("repair") ? "Re-pushes automatically when fixed — then CI runs again."
+          : undefined;
+        return (
+          <AiStatusBar
+            {...barProps}
+            operationName={aiJob.operationName || "Generating code"}
+            processingMessage={liveMessage}
+            currentModel={barProps.currentModel || selectedModel}
+            nextStep={nextStep}
+            onCancel={aiJob.cancel}
+          />
+        );
+      })() : null}
 
       {error ? <p className="rounded border border-red-800 bg-red-950/40 p-2 text-sm text-red-300">{error}</p> : null}
 
