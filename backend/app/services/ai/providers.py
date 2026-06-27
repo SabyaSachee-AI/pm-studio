@@ -224,16 +224,17 @@ FREE_ROUTING: dict[str, RoutingEntry] = {
     "code_generate": _build_free_routing(
         task_label="Code Generation",
         top4=[
-            ("openrouter", "poolside/laguna-m.1:free"),
-            ("huggingface", "Qwen/Qwen2.5-Coder-32B-Instruct"),
-            ("openrouter", "openai/gpt-oss-120b:free"),
             ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("huggingface", "Qwen/Qwen2.5-Coder-32B-Instruct"),
+            ("openrouter", "poolside/laguna-m.1:free"),
         ],
         quality_note=(
-            "Code-specialist chain: Laguna M.1 (purpose-built for code) and "
-            "Qwen2.5-Coder first; GPT-OSS 120B for reliable structured JSON; "
-            "Gemini 2.5 Flash (1M ctx) as a strong context-keeping fallback. "
-            "Deep 20+ model fallback for uninterrupted generation."
+            "JSON-reliability first: PM Studio returns code inside structured JSON, "
+            "so models that escape multiline strings cleanly come first — Gemini 2.5 "
+            "Flash (1M ctx, very reliable JSON) then GPT-OSS 120B, then the "
+            "code-specialists Qwen2.5-Coder and Laguna M.1. This avoids the literal-\\n / "
+            "control-char corruption weaker JSON models produce. Deep 20+ fallback."
         ),
         quality_stars=5,
         prompt_enhancement=True,
@@ -242,15 +243,15 @@ FREE_ROUTING: dict[str, RoutingEntry] = {
     "code_polish": _build_free_routing(
         task_label="Code Polish (quality pass)",
         top4=[
-            ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
-            ("openrouter", "openai/gpt-oss-120b:free"),
             ("gemini", "gemini-2.5-flash"),
+            ("openrouter", "openai/gpt-oss-120b:free"),
+            ("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free"),
             ("openrouter", "poolside/laguna-m.1:free"),
         ],
         quality_note=(
-            "Polish = highest-quality refactor. Strongest reasoners/large-context "
-            "models first (Nemotron Ultra 550B, GPT-OSS 120B, Gemini 1M ctx) so "
-            "whole-project quality lifts are reliable. Deep fallback."
+            "Polish rewrites whole files, so clean JSON output matters most: Gemini "
+            "2.5 Flash (1M ctx) and GPT-OSS 120B first, then the strong reasoner "
+            "Nemotron Ultra 550B and code-specialist Laguna M.1. Deep fallback."
         ),
         quality_stars=5,
         prompt_enhancement=True,
