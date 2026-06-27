@@ -183,11 +183,49 @@ def _related_block(related: list[GeneratedFile]) -> str:
     return "\n\n".join(parts)
 
 
+def _ts_looks_broken(content: str) -> str | None:
+    """Heuristic, dependency-free sanity check for JS/TS (no Node needed).
+
+    Catches the gross corruption weaker models produce — the exact errors that
+    keep failing ESLint — so broken TS is re-fixed BEFORE the slow CI round-trip,
+    instead of after. Conservative: only flags clear breakage to avoid false hits.
+    """
+    if not content.strip():
+        return "Empty file"
+    # Literal escape blob (a whole file returned as one escaped string).
+    if "\n" not in content and "\\n" in content and len(content) > 120:
+        return "Literal \\n escapes — file is not real source"
+    # Unbalanced brackets (ignore those inside strings/comments only loosely).
+    pairs = {")": "(", "]": "[", "}": "{"}
+    opens = {"(": 0, "[": 0, "{": 0}
+    in_s: str | None = None  # current string/template quote
+    prev = ""
+    for ch in content:
+        if in_s:
+            if ch == in_s and prev != "\\":
+                in_s = None
+        elif ch in "\"'`":
+            in_s = ch
+        elif ch in opens:
+            opens[ch] += 1
+        elif ch in pairs:
+            o = pairs[ch]
+            opens[o] -= 1
+            if opens[o] < 0:
+                return f"Unbalanced '{ch}' (more closing than opening)"
+        prev = ch
+    if any(v != 0 for v in opens.values()):
+        return f"Unbalanced brackets {opens}"
+    if in_s in ("\"", "'"):
+        return "Unterminated string literal"
+    return None
+
+
 def _static_check_file(path: str, content: str) -> str | None:
     """Cheap, dependency-free validity check. Returns an error string or None.
 
-    Covers the highest-value cases server-side (Python syntax, JSON) so obvious
-    breakage is caught instantly — before the slow push → CI round-trip.
+    Covers the highest-value cases server-side (Python syntax, JSON, and a JS/TS
+    heuristic) so obvious breakage is caught instantly — before the slow CI round-trip.
     """
     p = path.lower()
     try:
@@ -195,6 +233,8 @@ def _static_check_file(path: str, content: str) -> str | None:
             compile(content, path, "exec")
         elif p.endswith(".json"):
             json.loads(content)
+        elif p.endswith((".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")):
+            return _ts_looks_broken(content)
     except SyntaxError as exc:
         return f"SyntaxError: {exc.msg} (line {exc.lineno})"
     except json.JSONDecodeError as exc:
@@ -467,31 +507,62 @@ CMD ["sh", "-c", "npm start || npm run dev"]
 
 
 def ensure_deterministic_dockerfiles(db: Session, build: Build) -> None:
-    """Inject standard Dockerfiles for any app whose manifest exists but whose
-    Dockerfile is missing — the #1 cause of the smoke test failing forever, since
-    AI repair almost never adds infrastructure files. Only fills gaps; never
-    overwrites a Dockerfile the model already wrote."""
-    paths = {
-        f.path.lstrip("/")
+    """Inject Dockerfiles wherever they are needed but missing — the #1 cause of
+    the smoke test failing forever, since AI repair almost never adds infra files.
+
+    Two passes: (1) honor what docker-compose.yml's build contexts expect, so the
+    Dockerfile lands where compose looks for it; (2) a standard backend/frontend
+    fallback. Only fills gaps — never overwrites a Dockerfile the model wrote.
+    """
+    by_path = {
+        f.path.lstrip("/"): f
         for f in db.query(GeneratedFile)
         .filter(GeneratedFile.build_id == build.id, GeneratedFile.deleted_at.is_(None))
         .all()
     }
+    present = set(by_path)
 
     def have(p: str) -> bool:
-        return p in paths
+        return p in present
 
-    # Backend (Python)
-    if have("backend/requirements.txt") and not have("backend/Dockerfile"):
-        _persist_file(db, build, "backend/Dockerfile", _BACKEND_DOCKERFILE, "docker", task_id=None)
-    elif have("requirements.txt") and not have("backend/requirements.txt") and not have("Dockerfile"):
-        _persist_file(db, build, "Dockerfile", _BACKEND_DOCKERFILE, "docker", task_id=None)
+    def inject(path: str, tpl: str) -> None:
+        if path in present:
+            return
+        _persist_file(db, build, path, tpl, "docker", task_id=None)
+        present.add(path)
 
-    # Frontend (Node)
-    if have("frontend/package.json") and not have("frontend/Dockerfile"):
-        _persist_file(db, build, "frontend/Dockerfile", _FRONTEND_DOCKERFILE, "docker", task_id=None)
-    elif have("package.json") and not have("frontend/package.json") and not have("Dockerfile"):
-        _persist_file(db, build, "Dockerfile", _FRONTEND_DOCKERFILE, "docker", task_id=None)
+    def template_for(base: str) -> str | None:
+        b = base.strip().strip("./").rstrip("/")
+        req = f"{b}/requirements.txt".lstrip("/") if b else "requirements.txt"
+        pkg = f"{b}/package.json".lstrip("/") if b else "package.json"
+        if have(req):
+            return _BACKEND_DOCKERFILE
+        if have(pkg):
+            return _FRONTEND_DOCKERFILE
+        return None
+
+    # Pass 1 — compose-driven: a Dockerfile at each declared build context.
+    compose = by_path.get("docker-compose.yml") or by_path.get("docker-compose.yaml")
+    if compose is not None:
+        contexts = re.findall(r'context:\s*["\']?([^\s"\'#]+)', compose.content)
+        if not contexts and re.search(r'build:\s*["\']?\.', compose.content):
+            contexts = ["."]
+        for ctx in contexts:
+            b = ctx.strip().strip("./").rstrip("/")
+            dpath = f"{b}/Dockerfile".lstrip("/") if b else "Dockerfile"
+            tpl = template_for(b)
+            if tpl:
+                inject(dpath, tpl)
+
+    # Pass 2 — standard layout fallback.
+    if have("backend/requirements.txt"):
+        inject("backend/Dockerfile", _BACKEND_DOCKERFILE)
+    elif have("requirements.txt") and not have("backend/requirements.txt"):
+        inject("Dockerfile", _BACKEND_DOCKERFILE)
+    if have("frontend/package.json"):
+        inject("frontend/Dockerfile", _FRONTEND_DOCKERFILE)
+    elif have("package.json") and not have("frontend/package.json"):
+        inject("Dockerfile", _FRONTEND_DOCKERFILE)
 
 
 def ensure_deterministic_workflows(db: Session, build: Build) -> None:
@@ -651,7 +722,7 @@ _STATIC_FIX_SYSTEM = (
 )
 
 
-async def _validate_and_repair(db: Session, build: Build, max_fix: int = 15) -> dict[str, Any]:
+async def _validate_and_repair(db: Session, build: Build, max_fix: int = 25) -> dict[str, Any]:
     """Fast pre-push gate: static-check every file; auto-fix syntax failures locally
     (Python/JSON) so obvious breakage never reaches the slow CI round-trip."""
     files = (
@@ -960,15 +1031,27 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
         if p in db_files and p not in targets:
             targets.append(p)
 
+    # Robustness: even if the CI log lacked file paths, repair every file that
+    # fails our local static check (Python compile / JS-TS heuristic). This makes
+    # the loop self-sufficient — it never silently fixes zero files.
+    local_errs: dict[str, str] = {}
+    for p, f in db_files.items():
+        err = _static_check_file(f.path, f.content)
+        if err:
+            local_errs[p] = err
+            if p not in targets:
+                targets.append(p)
+
     manifest = _manifest(list(db_files.values()), limit=150)
     fixed = 0
 
-    for i in range(0, len(targets), _REPAIR_BATCH):
-        batch = targets[i:i + _REPAIR_BATCH]
+    async def _fix_batch(batch: list[str]) -> int:
         blocks: list[str] = []
         for p in batch:
-            errs = "; ".join(parsed["files"].get(p) or []) or "see CI log"
-            blocks.append(f"FILE: {p}\nCI ERRORS: {errs}\nCURRENT CONTENT:\n{db_files[p].content}")
+            errs = "; ".join(parsed["files"].get(p) or [])
+            if local_errs.get(p):
+                errs = f"{errs}; static check: {local_errs[p]}" if errs else f"static check: {local_errs[p]}"
+            blocks.append(f"FILE: {p}\nERRORS: {errs or 'see CI log'}\nCURRENT CONTENT:\n{db_files[p].content}")
         prompt = (
             f"Project: {project_name}\n\n"
             f"Fix these files so CI passes. Return each corrected file COMPLETE and "
@@ -977,24 +1060,30 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
             f"CI LOG (distilled):\n```\n{distilled[:4000]}\n```\n\n"
             + "\n\n".join(blocks)
         )
-        try:
-            result = await ai_call(
-                prompt=prompt,
-                response_model=GeneratedFileSet,
-                system=REPAIR_SYSTEM,
-                max_tokens=14000,
-                task_type="code_generate",
-                screen="tasks",
-            )
-        except Exception as exc:  # noqa: BLE001 — one batch failing shouldn't abort the cycle
-            logger.warning("Repair batch failed: %s", exc)
-            continue
+        result = await ai_call(
+            prompt=prompt, response_model=GeneratedFileSet, system=REPAIR_SYSTEM,
+            max_tokens=14000, task_type="code_generate", screen="tasks",
+        )
+        n = 0
         for ff in result.files:
             if ff.path and ff.content.strip():
                 _persist_file(db, build, ff.path, ff.content, ff.language,
                               task_id=None, status=FileStatus.edited)
-                fixed += 1
+                n += 1
         db.commit()
+        return n
+
+    for i in range(0, len(targets), _REPAIR_BATCH):
+        batch = targets[i:i + _REPAIR_BATCH]
+        try:
+            fixed += await _fix_batch(batch)
+        except Exception as exc:  # noqa: BLE001 — one batch shouldn't abort the cycle
+            logger.warning("Repair batch failed (%s) — retrying once", exc)
+            try:
+                await asyncio.sleep(_REPAIR_THROTTLE_SEC)
+                fixed += await _fix_batch(batch)  # single retry (handles a transient 429)
+            except Exception as exc2:  # noqa: BLE001
+                logger.warning("Repair batch retry failed: %s", exc2)
         if i + _REPAIR_BATCH < len(targets):
             await asyncio.sleep(_REPAIR_THROTTLE_SEC)  # throttle → fewer 429s
 

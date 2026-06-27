@@ -39,6 +39,16 @@ def _project_info(db, build: Build) -> dict[str, Any]:
     }
 
 
+def _remember_model(db, build: Build, provider: str | None, model: str | None) -> None:
+    """Persist the user's model pick so the autonomous CI-repair loop can reuse it
+    (otherwise auto-repair would always fall back to the free chain)."""
+    if not provider and not model:
+        return
+    report = dict(build.quality_report or {})
+    report["preferred_model"] = {"provider": provider, "model": model}
+    build.quality_report = report
+
+
 @celery_app.task(bind=True, name="build.scaffold")
 def scaffold_build_task(
     self,
@@ -116,6 +126,7 @@ def generate_build_task(
         if not build:
             return {"error": "Build not found"}
         build.generation_task_id = self.request.id
+        _remember_model(db, build, model_provider, model_id)
         db.commit()
         result = _run_async(generate_build_code(UUID(build_id), db, resume=resume))
         # Result-level failure (in-run retries exhausted) → auto-resume.
@@ -304,6 +315,7 @@ def repair_build_task(
         report = dict(build.quality_report or {})
         report["repair_attempts"] = 0
         build.quality_report = report
+        _remember_model(db, build, model_provider, model_id)
         db.commit()
         result = _run_async(
             repair_build_from_ci(UUID(build_id), db, _project_info(db, build)["name"])
@@ -393,9 +405,15 @@ def auto_ci_watch_task(self, build_id: str, polls: int = 0) -> dict[str, Any]:
         from app.models.project import Project  # noqa: PLC0415
         project = db.query(Project).filter(Project.id == build.project_id).first()
         pname = project.name if project else "project"
+        # Reuse the model the user picked for this build (else the free chain).
+        pref = (report.get("preferred_model") or {}) if isinstance(report, dict) else {}
         _set_auto_ci(db, build, "repairing",
                      f"CI failed — AI reading logs & fixing (attempt {attempts + 1}/{_MAX_REPAIR_ATTEMPTS})…")
-        result = _run_async(repair_build_from_ci(UUID(build_id), db, pname))
+        set_model_override(pref.get("provider"), pref.get("model"))
+        try:
+            result = _run_async(repair_build_from_ci(UUID(build_id), db, pname))
+        finally:
+            clear_model_override()
         if isinstance(result, dict) and "error" in result:
             _set_auto_ci(db, build, "stopped", f"Auto-repair could not continue — {result['error']}")
             return {"stop": result["error"]}
