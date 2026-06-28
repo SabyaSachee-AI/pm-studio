@@ -75,11 +75,26 @@ def patch_auto_ci(db, build: Build, *, reset_at: bool = False, **extra: Any) -> 
     db.commit()
 
 
+# Live-activity fields that must not linger once auto-repair stops/passes.
+_ACTIVITY_FIELDS = (
+    "activity_step", "activity_detail", "batch_current", "batch_total",
+    "files_fixed_so_far", "files_targeted", "current_model", "model_attempt",
+    "repair_cycle", "repair_cycle_max",
+)
+
+
 def set_auto_ci_phase(
     db, build: Build, phase: str, message: str, **extra: Any,
 ) -> None:
-    """Start or switch an auto-CI phase (resets the elapsed timer)."""
+    """Start or switch an auto-CI phase (resets the elapsed timer).
+
+    On a terminal phase (stopped/passed) clear the live-activity fields so no
+    stale "AI fixing…" / batch progress lingers in the UI.
+    """
     extra.setdefault("stale", False)
+    if phase not in _ACTIVE_PHASES:
+        for k in _ACTIVITY_FIELDS:
+            extra.setdefault(k, None)
     patch_auto_ci(
         db, build,
         reset_at=True,

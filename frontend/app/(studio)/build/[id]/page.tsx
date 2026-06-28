@@ -366,8 +366,9 @@ export default function BuildWorkspacePage() {
   // Poll CI while QA is running, CI failed, or auto-repair is active.
   useEffect(() => {
     if (!build?.github_full_name) return;
-    const auto = (build.quality_report as Record<string, unknown> | null)?.auto_ci as { phase?: string } | undefined;
-    const autoActive = ["watching", "repairing", "repushed"].includes(auto?.phase || "");
+    const autoActive = isAutoRepairActive(
+      (build.quality_report as Record<string, unknown> | null)?.auto_ci as Parameters<typeof isAutoRepairActive>[0],
+    );
     void pollQa();
     if (build.status !== "qa" && build.status !== "failed" && !autoActive) return;
     if (qa?.status === "blocked" || qa?.status === "auth_failed" || qa?.status === "error") return;
@@ -662,11 +663,17 @@ export default function BuildWorkspacePage() {
                 <div className="min-w-0 flex-1">
                   {(() => {
                     const auto = (build.quality_report as Record<string, unknown> | null)?.auto_ci as { phase?: string; message?: string } | undefined;
-                    if (auto?.phase === "stopped") {
+                    const attemptsUsed = typeof repairAttempts === "number" ? repairAttempts : 0;
+                    if (auto?.phase === "stopped" || attemptsUsed >= 5) {
                       return (
-                        <p className="mb-1.5 flex items-center gap-1.5 rounded bg-amber-950/40 px-2 py-1 font-medium text-amber-200">
-                          <i className="ti ti-robot-off" aria-hidden /> Auto-repair stopped — {auto.message}
-                        </p>
+                        <div className="mb-1.5 rounded bg-amber-950/40 px-2 py-1.5 text-amber-200">
+                          <p className="flex items-center gap-1.5 font-medium">
+                            <i className="ti ti-robot-off" aria-hidden /> Auto-repair stopped{auto?.message ? ` — ${auto.message}` : " — limit reached."}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-amber-300/90">
+                            Click <b>Fix with AI &amp; re-push</b> below to retry (resets to a fresh 5 attempts) — pick a stronger model above first for the best result.
+                          </p>
+                        </div>
                       );
                     }
                     if (auto?.phase === "passed") {
@@ -755,7 +762,9 @@ export default function BuildWorkspacePage() {
                       <div className="mt-2 flex flex-wrap gap-2">
                         {qa.run_url ? <a href={qa.run_url} target="_blank" rel="noreferrer" className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:bg-gray-800">View run logs</a> : null}
                         {!actionsLocked ? (
-                          <button onClick={() => void handleRepair()} className="rounded border border-blue-800 px-2 py-1 text-blue-200 hover:bg-blue-950/40">Fix with AI &amp; re-push</button>
+                          <button onClick={() => void handleRepair()} className="rounded border border-blue-800 px-2 py-1 text-blue-200 hover:bg-blue-950/40">
+                            Fix with AI &amp; re-push <span className="text-blue-300/70">· {buildModel ? buildModel.model : "Free chain"}</span>
+                          </button>
                         ) : null}
                         <button onClick={() => void handleMarkReady()} className="rounded border border-emerald-800 px-2 py-1 text-emerald-300 hover:bg-emerald-950/40">Mark ready anyway</button>
                       </div>
