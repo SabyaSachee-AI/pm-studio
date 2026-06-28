@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { AiStatusBar, aiJobStatusBarProps } from "@/components/ui/AiStatusBar";
+import { AutoRepairStatusBar, isAutoRepairActive } from "@/components/features/build/AutoRepairStatusBar";
 import { ArchModelSelector } from "@/components/ui/ArchModelSelector";
 import { CodeEditor } from "@/components/ui/CodeEditor";
 import { useAiJob } from "@/lib/hooks/useAiJob";
@@ -200,6 +201,20 @@ export default function BuildWorkspacePage() {
   }
 
   const isGenerating = (build && GENERATING.has(build.status)) || aiJob.isRunning;
+  const autoCi = (build?.quality_report as Record<string, unknown> | null)?.auto_ci as
+    { phase?: string; message?: string; at?: string; current_model?: string; model_attempt?: number;
+      repair_cycle?: number; repair_cycle_max?: number } | undefined;
+  const autoRepairActive = isAutoRepairActive(autoCi);
+  const actionsLocked = isGenerating || autoRepairActive;
+  const repairAttempts = (build?.quality_report as Record<string, unknown> | null)?.repair_attempts as
+    number | undefined;
+  const preferredModel = (build?.quality_report as Record<string, unknown> | null)?.preferred_model as
+    { provider?: string; model?: string } | undefined;
+  const repairModelLabel = preferredModel?.provider && preferredModel?.model
+    ? `${preferredModel.provider} / ${preferredModel.model}`
+    : buildModel
+      ? `${buildModel.provider} / ${buildModel.model}`
+      : "Auto (free model chain)";
 
   async function handleScaffold() {
     try {
@@ -498,39 +513,39 @@ export default function BuildWorkspacePage() {
 
           {/* 1 — Scaffold (only before any code exists) */}
           {build.status === "draft" ? (
-            <Button size="sm" disabled={isGenerating} onClick={() => void handleScaffold()}>
+            <Button size="sm" disabled={actionsLocked} onClick={() => void handleScaffold()}>
               <StepNum n={1} /><i className="ti ti-stack-2 mr-1.5" aria-hidden /> Scaffold
             </Button>
           ) : null}
 
           {/* 2 — Generate code */}
-          {(build.status === "scaffolded" || build.status === "ready" || build.status === "qa") && !isGenerating ? (
+          {(build.status === "scaffolded" || build.status === "ready" || build.status === "qa") && !actionsLocked ? (
             <Button size="sm" onClick={() => void handleGenerate(false)}>
               <StepNum n={2} /><i className="ti ti-sparkles mr-1.5" aria-hidden /> Generate code
             </Button>
           ) : null}
-          {build.can_resume && !isGenerating ? (
+          {build.can_resume && !actionsLocked ? (
             <Button size="sm" variant="outline" onClick={() => void handleGenerate(true)}>
               <i className="ti ti-refresh mr-1.5" aria-hidden /> Resume
             </Button>
           ) : null}
 
           {/* 3 — Polish (AI) */}
-          {build.file_count > 0 && !isGenerating ? (
+          {build.file_count > 0 && !actionsLocked ? (
             <Button size="sm" variant="outline" onClick={() => void handlePolish()}>
               <StepNum n={3} /><i className="ti ti-wand mr-1.5" aria-hidden /> Polish (AI)
             </Button>
           ) : null}
 
           {/* 4 — Generate tests */}
-          {build.file_count > 0 && !isGenerating ? (
+          {build.file_count > 0 && !actionsLocked ? (
             <Button size="sm" variant="outline" onClick={() => void handleGenerateTests()}>
               <StepNum n={4} /><i className="ti ti-test-pipe mr-1.5" aria-hidden /> Generate tests
             </Button>
           ) : null}
 
           {/* 5 — Push to GitHub (triggers CI/QA automatically) */}
-          {build.file_count > 0 && !isGenerating ? (
+          {build.file_count > 0 && !actionsLocked ? (
             <Button size="sm" variant="outline" onClick={() => void handlePush()}>
               <StepNum n={5} /><i className="ti ti-brand-github mr-1.5" aria-hidden /> Push to GitHub
             </Button>
@@ -544,7 +559,7 @@ export default function BuildWorkspacePage() {
           ) : null}
 
           {/* 7 — Deploy to VPS */}
-          {build.github_full_name && !isGenerating ? (
+          {build.github_full_name && !actionsLocked ? (
             <Button size="sm" variant="outline" onClick={() => void handleDeploy()}>
               <StepNum n={7} /><i className="ti ti-rocket mr-1.5" aria-hidden /> Deploy to VPS
             </Button>
@@ -553,7 +568,7 @@ export default function BuildWorkspacePage() {
           {/* divider — utility actions below (not part of the linear flow) */}
           <span className="mx-1 h-5 w-px bg-gray-700" aria-hidden />
 
-          {build.github_full_name && !isGenerating ? (
+          {build.github_full_name && !actionsLocked ? (
             <Button size="sm" variant="outline" disabled={busy} onClick={() => void handleSyncFromGithub()}>
               <i className="ti ti-cloud-download mr-1.5" aria-hidden /> Sync from GitHub
             </Button>
@@ -567,6 +582,17 @@ export default function BuildWorkspacePage() {
           </Button>
         </div>
       </div>
+
+      {autoRepairActive ? (
+        <AutoRepairStatusBar
+          autoCi={autoCi}
+          repairAttempts={repairAttempts}
+          repairPlan={(build.quality_report as Record<string, unknown> | null)?.repair_plan as {
+            fixed?: number; targeted?: string[];
+          } | undefined}
+          fallbackModel={repairModelLabel}
+        />
+      ) : null}
 
       {/* Pipeline stage stepper — full flow at a glance */}
       <div className="flex items-center gap-1 overflow-x-auto rounded-lg border border-gray-800 bg-gray-900/40 px-3 py-2">
@@ -610,6 +636,22 @@ export default function BuildWorkspacePage() {
       {/* CI / QA explainer — always tells you WHY this stage is where it is */}
       {build.github_full_name && (build.status === "qa" || build.status === "failed" || qa?.conclusion === "failure") ? (
         (() => {
+          if (autoRepairActive) {
+            return (
+              <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-xs text-gray-400">
+                <p>
+                  The last CI run failed on GitHub.{" "}
+                  <span className="text-gray-300">Auto-repair is handling it</span> — see the blue status bar above.
+                </p>
+                {qa?.run_url ? (
+                  <a href={qa.run_url} target="_blank" rel="noreferrer" className="mt-2 inline-block text-blue-400 hover:underline">
+                    View last CI logs on GitHub
+                  </a>
+                ) : null}
+              </div>
+            );
+          }
+
           const bad = qa?.status === "blocked" || qa?.status === "auth_failed" || qa?.status === "error"
             || qa?.conclusion === "failure" || build.status === "failed" || qa?.status === "no_runs"
             || (!!qa?.error && !qa?.conclusion);
@@ -620,19 +662,17 @@ export default function BuildWorkspacePage() {
                 <div className="min-w-0 flex-1">
                   {(() => {
                     const auto = (build.quality_report as Record<string, unknown> | null)?.auto_ci as { phase?: string; message?: string } | undefined;
-                    if (!auto) return null;
-                    const active = ["watching", "repairing", "repushed"].includes(auto.phase || "");
-                    if (active) {
-                      return (
-                        <p className="mb-1.5 flex items-center gap-1.5 rounded bg-blue-950/40 px-2 py-1 font-medium text-blue-200">
-                          <i className="ti ti-robot animate-pulse" aria-hidden /> Auto-repair running — {auto.message}
-                        </p>
-                      );
-                    }
-                    if (auto.phase === "stopped") {
+                    if (auto?.phase === "stopped") {
                       return (
                         <p className="mb-1.5 flex items-center gap-1.5 rounded bg-amber-950/40 px-2 py-1 font-medium text-amber-200">
                           <i className="ti ti-robot-off" aria-hidden /> Auto-repair stopped — {auto.message}
+                        </p>
+                      );
+                    }
+                    if (auto?.phase === "passed") {
+                      return (
+                        <p className="mb-1.5 flex items-center gap-1.5 rounded bg-emerald-950/40 px-2 py-1 font-medium text-emerald-200">
+                          <i className="ti ti-circle-check" aria-hidden /> {auto.message}
                         </p>
                       );
                     }
@@ -714,7 +754,7 @@ export default function BuildWorkspacePage() {
                       <p className="mt-0.5 text-gray-400">A test or build step failed on GitHub. Open the run logs, or let AI read the logs and fix + re-push.</p>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {qa.run_url ? <a href={qa.run_url} target="_blank" rel="noreferrer" className="rounded border border-gray-700 px-2 py-1 text-gray-300 hover:bg-gray-800">View run logs</a> : null}
-                        {!isGenerating && !["watching", "repairing", "repushed"].includes(((build.quality_report as Record<string, unknown> | null)?.auto_ci as { phase?: string } | undefined)?.phase || "") ? (
+                        {!actionsLocked ? (
                           <button onClick={() => void handleRepair()} className="rounded border border-blue-800 px-2 py-1 text-blue-200 hover:bg-blue-950/40">Fix with AI &amp; re-push</button>
                         ) : null}
                         <button onClick={() => void handleMarkReady()} className="rounded border border-emerald-800 px-2 py-1 text-emerald-300 hover:bg-emerald-950/40">Mark ready anyway</button>

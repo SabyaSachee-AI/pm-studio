@@ -333,7 +333,19 @@ def repair_build_task(
             report = dict(build.quality_report or {})
             report["repair_plan"] = {"targeted": [], "fixed": 0, "error": str(exc)[:200]}
             build.quality_report = report
-            db.commit()
+            auto = dict(report.get("auto_ci") or {})
+            if auto.get("phase") in ("watching", "repairing", "repushed"):
+                from app.services.build.auto_ci_progress import set_auto_ci_phase  # noqa: PLC0415
+                from app.services.build.push_lock import release_auto_ci  # noqa: PLC0415
+
+                set_auto_ci_phase(
+                    db, build, "stopped",
+                    f"Repair failed — {str(exc)[:120]}",
+                    activity_step="stopped",
+                )
+                release_auto_ci(build_id)
+            else:
+                db.commit()
         return {"error": str(exc)[:500]}
     finally:
         db.close()
@@ -344,32 +356,71 @@ _AUTO_CI_POLL = 20        # seconds between CI status polls
 _AUTO_CI_MAX_POLLS = 90   # ~30 min hard cap waiting for one CI run to finish
 
 
-def _schedule_auto_ci(build_id: str, polls: int = 0, countdown: int = 25) -> str | None:
-    """Enqueue auto-CI watcher with deduplication (one chain per build)."""
+def _schedule_auto_ci(
+    build_id: str,
+    polls: int = 0,
+    countdown: int = 25,
+    *,
+    continue_chain: bool = False,
+) -> str | None:
+    """Enqueue auto-CI watcher with deduplication (one chain per build).
+
+    Use continue_chain=True when re-scheduling mid-chain (e.g. after repush) — the
+    Redis lock is already held and must not be re-acquired with SET NX.
+    """
+    from app.services.build.auto_ci_progress import (  # noqa: PLC0415
+        clear_stale_auto_ci,
+        is_auto_ci_stale,
+    )
     from app.services.build.push_lock import (  # noqa: PLC0415
         refresh_auto_ci,
         release_auto_ci,
         try_acquire_auto_ci,
     )
 
-    if polls == 0 and not try_acquire_auto_ci(build_id):
-        logger.info("Auto-CI already active for build %s — skipping duplicate watcher", build_id)
-        return None
-    if polls > 0:
+    if continue_chain or polls > 0:
         refresh_auto_ci(build_id)
+    elif not try_acquire_auto_ci(build_id):
+        stale_db = SyncSessionLocal()
+        try:
+            stale_build = stale_db.query(Build).filter(
+                Build.id == UUID(build_id), Build.deleted_at.is_(None),
+            ).first()
+            if stale_build:
+                auto = dict((stale_build.quality_report or {}).get("auto_ci") or {})
+                if is_auto_ci_stale(auto):
+                    clear_stale_auto_ci(stale_db, stale_build)
+                    if not try_acquire_auto_ci(build_id):
+                        logger.info("Auto-CI lock still held for build %s after stale clear", build_id)
+                        return None
+                else:
+                    logger.info(
+                        "Auto-CI already active for build %s — skipping duplicate watcher", build_id,
+                    )
+                    return None
+            else:
+                return None
+        finally:
+            stale_db.close()
     try:
         result = auto_ci_watch_task.apply_async(
             (build_id, polls), countdown=countdown, queue="build",
         )
         return result.id
     except Exception:  # noqa: BLE001
-        if polls == 0:
+        if polls == 0 and not continue_chain:
             release_auto_ci(build_id)
         raise
 
 
 def resume_orphaned_auto_ci() -> int:
     """Re-enqueue auto-CI watchers for builds interrupted by a worker restart."""
+    from app.services.build.auto_ci_progress import (  # noqa: PLC0415
+        clear_stale_auto_ci,
+        is_auto_ci_stale,
+    )
+    from app.services.build.push_lock import auto_ci_lock_held  # noqa: PLC0415
+
     db = SyncSessionLocal()
     resumed = 0
     try:
@@ -379,25 +430,64 @@ def resume_orphaned_auto_ci() -> int:
         ).all()
         for build in builds:
             report = dict(build.quality_report or {})
-            auto = report.get("auto_ci") or {}
-            if auto.get("phase") in ("watching", "repairing", "repushed"):
-                if _schedule_auto_ci(str(build.id), polls=0, countdown=5):
-                    resumed += 1
-                    logger.info("Resumed auto-CI watcher for build %s", build.id)
+            auto = dict(report.get("auto_ci") or {})
+            if auto.get("phase") not in ("watching", "repairing", "repushed"):
+                continue
+            if is_auto_ci_stale(auto):
+                clear_stale_auto_ci(db, build)
+                logger.info("Cleared stale auto-CI for build %s on worker startup", build.id)
+                continue
+            continuing = auto_ci_lock_held(str(build.id))
+            if _schedule_auto_ci(
+                str(build.id), polls=0, countdown=5, continue_chain=continuing,
+            ):
+                resumed += 1
+                logger.info("Resumed auto-CI watcher for build %s", build.id)
     finally:
         db.close()
     return resumed
 
 
-def _set_auto_ci(db, build: Build, phase: str, message: str) -> None:
+def _set_auto_ci(db, build: Build, phase: str, message: str, **extra: object) -> None:
     """Record autonomous-CI progress so the UI can show it live."""
-    report = dict(build.quality_report or {})
-    report["auto_ci"] = {
-        "phase": phase, "message": message,
-        "at": datetime.now(timezone.utc).isoformat(),
-    }
-    build.quality_report = report
-    db.commit()
+    from app.services.build.auto_ci_progress import set_auto_ci_phase  # noqa: PLC0415
+
+    set_auto_ci_phase(db, build, phase, message, **extra)
+
+
+def _sync_auto_ci_ai_meta(db, build: Build) -> None:
+    """Copy live AI model/attempt from the running Celery task into auto_ci."""
+    try:
+        from celery import current_task  # noqa: PLC0415
+        from celery.result import AsyncResult  # noqa: PLC0415
+        from app.services.build.auto_ci_progress import patch_auto_ci  # noqa: PLC0415
+
+        tid = getattr(getattr(current_task, "request", None), "id", None)
+        if not tid:
+            return
+        info = AsyncResult(tid).info
+        if not isinstance(info, dict):
+            return
+        extra: dict[str, object] = {}
+        if info.get("current_model"):
+            extra["current_model"] = info["current_model"]
+        if info.get("attempt"):
+            extra["model_attempt"] = info["attempt"]
+        if info.get("message"):
+            extra["activity_detail"] = info["message"]
+        if extra:
+            patch_auto_ci(db, build, **extra)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _preferred_model_label(report: dict) -> str | None:
+    pref = report.get("preferred_model") or {}
+    if isinstance(pref, dict) and pref.get("model"):
+        provider = pref.get("provider") or ""
+        model = pref.get("model") or ""
+        return f"{provider} / {model}".strip(" /") if provider else str(model)
+    return None
 
 
 @celery_app.task(bind=True, name="build.auto_ci", max_retries=None)
@@ -439,7 +529,11 @@ def auto_ci_watch_task(self, build_id: str, polls: int = 0) -> dict[str, Any]:
                 _set_auto_ci(db, build, "stopped", "Auto-CI stopped — CI did not finish in time.")
                 release_auto_ci(build_id)
                 return {"stop": "timeout"}
-            _set_auto_ci(db, build, "watching", "Waiting for CI to finish on GitHub…")
+            _set_auto_ci(
+                db, build, "watching", "Waiting for CI to finish on GitHub…",
+                activity_step="waiting_ci",
+                activity_detail="Polling GitHub Actions for the latest run…",
+            )
             _schedule_auto_ci(build_id, polls + 1, countdown=_AUTO_CI_POLL)
             return {"wait": status}
 
@@ -462,11 +556,22 @@ def auto_ci_watch_task(self, build_id: str, polls: int = 0) -> dict[str, Any]:
         project = db.query(Project).filter(Project.id == build.project_id).first()
         pname = project.name if project else "project"
         pref = (report.get("preferred_model") or {}) if isinstance(report, dict) else {}
-        _set_auto_ci(db, build, "repairing",
-                     f"CI failed — AI reading logs & fixing (attempt {attempts + 1}/{_MAX_REPAIR_ATTEMPTS})…")
+        model_label = _preferred_model_label(report) or "Auto (free model chain)"
+        build.generation_task_id = self.request.id
+        db.commit()
+        _set_auto_ci(
+            db, build, "repairing",
+            f"CI failed — AI reading logs & fixing (attempt {attempts + 1}/{_MAX_REPAIR_ATTEMPTS})…",
+            current_model=model_label,
+            repair_cycle=attempts + 1,
+            repair_cycle_max=_MAX_REPAIR_ATTEMPTS,
+            activity_step="read_logs",
+            activity_detail="Downloading CI logs from GitHub…",
+        )
         set_model_override(pref.get("provider"), pref.get("model"))
         try:
             result = _run_async(repair_build_from_ci(UUID(build_id), db, pname))
+            _sync_auto_ci_ai_meta(db, build)
         finally:
             clear_model_override()
         if isinstance(result, dict) and "error" in result:
@@ -474,9 +579,14 @@ def auto_ci_watch_task(self, build_id: str, polls: int = 0) -> dict[str, Any]:
             release_auto_ci(build_id)
             return {"stop": result["error"]}
 
-        _set_auto_ci(db, build, "repushed",
-                     f"Fixed {result.get('files_fixed', 0)} file(s) & re-pushed — watching new CI run…")
-        _schedule_auto_ci(build_id, polls=0, countdown=30)
+        _set_auto_ci(
+            db, build, "repushed",
+            f"Fixed {result.get('files_fixed', 0)} file(s) & re-pushed — watching new CI run…",
+            activity_step="waiting_ci",
+            activity_detail="Push complete — waiting for GitHub to start a new CI run…",
+            files_fixed=result.get("files_fixed", 0),
+        )
+        _schedule_auto_ci(build_id, polls=0, countdown=30, continue_chain=True)
         return {"repaired": attempts + 1}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Auto-CI watcher crashed")

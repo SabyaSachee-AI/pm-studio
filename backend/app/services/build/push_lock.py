@@ -68,6 +68,13 @@ def try_acquire_auto_ci(build_id: str) -> bool:
     return bool(_client().set(f"build:auto_ci:{build_id}", "1", nx=True, ex=_AUTO_CI_TTL_SEC))
 
 
+def auto_ci_lock_held(build_id: str) -> bool:
+    try:
+        return bool(_client().exists(f"build:auto_ci:{build_id}"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def release_auto_ci(build_id: str) -> None:
     try:
         _client().delete(f"build:auto_ci:{build_id}")

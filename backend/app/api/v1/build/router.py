@@ -152,6 +152,19 @@ async def get_build(
     _current_user: User = Depends(get_current_user),
 ) -> BuildDetailResponse:
     build = await _load_build(build_id, db)
+    from app.core.database import SyncSessionLocal  # noqa: PLC0415
+    from app.services.build.auto_ci_progress import reconcile_auto_ci  # noqa: PLC0415
+
+    sync_db = SyncSessionLocal()
+    try:
+        sync_build = sync_db.query(Build).filter(
+            Build.id == build_id, Build.deleted_at.is_(None),
+        ).first()
+        if sync_build:
+            reconcile_auto_ci(sync_db, sync_build)
+    finally:
+        sync_db.close()
+    await db.refresh(build)
     files = (
         await db.execute(
             select(GeneratedFile)
@@ -319,9 +332,15 @@ async def get_build_qa(
     if not build.github_full_name:
         raise HTTPException(status_code=400, detail="Build not pushed to GitHub yet")
     from app.core.database import SyncSessionLocal  # noqa: PLC0415
+    from app.services.build.auto_ci_progress import reconcile_auto_ci  # noqa: PLC0415
     from app.services.build.github import get_qa_status  # noqa: PLC0415
     sync_db = SyncSessionLocal()
     try:
+        sync_build = sync_db.query(Build).filter(
+            Build.id == build_id, Build.deleted_at.is_(None),
+        ).first()
+        if sync_build:
+            reconcile_auto_ci(sync_db, sync_build)
         return await get_qa_status(build_id, sync_db)
     finally:
         sync_db.close()

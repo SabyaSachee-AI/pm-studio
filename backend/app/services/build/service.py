@@ -1054,10 +1054,18 @@ async def ai_edit_file(build_id: UUID, file_id: UUID, instruction: str, db: Sess
 _MAX_REPAIR_ATTEMPTS = 5
 
 REPAIR_SYSTEM = (
-    "You are a senior engineer fixing a CI failure. You are given the failing CI "
-    "logs and the project's file manifest. Return ONLY the files that must change "
-    "to make lint/typecheck/build/tests pass — each file COMPLETE and runnable. "
-    "Keep imports/paths/signatures consistent with the rest of the project."
+    "You are a senior engineer fixing a CI failure for a software project of ANY "
+    "language or framework. You are given the failing CI log and, for each file to "
+    "fix, its full current content plus the specific errors.\n\n"
+    "OUTPUT CONTRACT — follow EXACTLY (this makes the result reliable regardless of model):\n"
+    "1. Return a JSON `files` array; each item is the COMPLETE corrected file — never a diff, snippet, or partial file.\n"
+    "2. Keep the SAME path for every file you fix.\n"
+    "3. Fix ALL listed errors for that file, not just the first one.\n"
+    "4. Preserve each file's imports, exports, public names and type signatures so the rest of the project still compiles.\n"
+    "5. Emit REAL runnable source with REAL newlines. NEVER include markdown code fences (```), literal \\n escape sequences, control characters, placeholders, TODOs, or '...rest unchanged' comments.\n"
+    "6. If a docker-compose service uses an invalid/unknown image tag, replace it with a valid, currently-published tag for the SAME image (or a widely-available equivalent).\n"
+    "7. Do not invent new dependencies — use only what the project already declares.\n"
+    "Return only the corrected files."
 )
 
 
@@ -1101,6 +1109,12 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
 
     _save_plan([], 0, note="Repair cycle started")
 
+    def _live(step: str, detail: str, **kw: object) -> None:
+        from app.services.build.auto_ci_progress import patch_auto_ci  # noqa: PLC0415
+        patch_auto_ci(db, build, activity_step=step, activity_detail=detail, **kw)
+
+    _live("read_logs", "Downloading CI logs from GitHub…")
+
     # Full logs (with file paths) for parsing + a distilled view for context.
     raw = ""
     if build.github_full_name and ci.get("run_id"):
@@ -1113,6 +1127,11 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
         return {"error": "Could not read CI logs for this run"}
     parsed = parse_ci_failures(raw)
     distilled = _distil_ci(raw)
+    _live(
+        "parse_logs",
+        f"Found {len(parsed.get('files') or {})} file(s) to fix in CI logs",
+        files_targeted=len(parsed.get("files") or {}),
+    )
 
     service_hints: list[str] = []
     for item in parsed.get("infra") or []:
@@ -1123,6 +1142,8 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
     docker_injected = ensure_deterministic_dockerfiles(
         db, build, service_hints=service_hints or None,
     )
+    if docker_injected:
+        _live("dockerfiles", f"Injected {docker_injected} missing Dockerfile(s)")
     db.commit()
 
     db_files = {
@@ -1150,8 +1171,25 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
 
     manifest = _manifest(list(db_files.values()), limit=150)
     fixed = 0
+    total_batches = max(1, (len(targets) + _REPAIR_BATCH - 1) // _REPAIR_BATCH)
+    _live(
+        "ai_fix",
+        f"Preparing to fix {len(targets)} file(s) in {total_batches} AI batch(es)…",
+        files_targeted=len(targets),
+        batch_current=0,
+        batch_total=total_batches,
+    )
 
-    async def _fix_batch(batch: list[str]) -> int:
+    async def _fix_batch(batch: list[str], batch_num: int) -> int:
+        names = ", ".join(batch[:2]) + ("…" if len(batch) > 2 else "")
+        _live(
+            "ai_fix",
+            f"AI fixing batch {batch_num}/{total_batches}: {names}",
+            batch_current=batch_num,
+            batch_total=total_batches,
+            files_targeted=len(targets),
+            files_fixed_so_far=fixed,
+        )
         blocks: list[str] = []
         for p in batch:
             errs = "; ".join(parsed["files"].get(p) or [])
@@ -1172,28 +1210,49 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
         )
         n = 0
         for ff in result.files:
-            if ff.path and ff.content.strip():
-                _persist_file(db, build, ff.path, ff.content, ff.language,
-                              task_id=None, status=FileStatus.edited)
-                n += 1
+            if not (ff.path and ff.content.strip()):
+                continue
+            old = db_files.get(ff.path.lstrip("/"))
+            # Guard: never replace a previously-valid file with a now-broken one.
+            if old is not None and _static_check_file(ff.path, ff.content) \
+                    and _static_check_file(old.path, old.content) is None:
+                continue
+            _persist_file(db, build, ff.path, ff.content, ff.language,
+                          task_id=None, status=FileStatus.edited)
+            n += 1
         db.commit()
+        try:
+            from app.workers.build_tasks import _sync_auto_ci_ai_meta  # noqa: PLC0415
+            _sync_auto_ci_ai_meta(db, build)
+        except Exception:  # noqa: BLE001
+            pass
         return n
 
     for i in range(0, len(targets), _REPAIR_BATCH):
         batch = targets[i:i + _REPAIR_BATCH]
+        batch_num = i // _REPAIR_BATCH + 1
         try:
-            fixed += await _fix_batch(batch)
+            fixed += await _fix_batch(batch, batch_num)
         except Exception as exc:  # noqa: BLE001 — one batch shouldn't abort the cycle
             logger.warning("Repair batch failed (%s) — retrying once", exc)
             try:
                 await asyncio.sleep(_REPAIR_THROTTLE_SEC)
-                fixed += await _fix_batch(batch)  # single retry (handles a transient 429)
+                fixed += await _fix_batch(batch, batch_num)  # single retry (handles a transient 429)
             except Exception as exc2:  # noqa: BLE001
                 logger.warning("Repair batch retry failed: %s", exc2)
+        _live(
+            "ai_fix",
+            f"Fixed {fixed} of {len(targets)} file(s) so far",
+            files_fixed_so_far=fixed,
+            files_targeted=len(targets),
+            batch_current=batch_num,
+            batch_total=total_batches,
+        )
         if i + _REPAIR_BATCH < len(targets):
             await asyncio.sleep(_REPAIR_THROTTLE_SEC)  # throttle → fewer 429s
 
     # Layer A — static gate (Python compile + JSON) catches/repairs more.
+    _live("static_gate", "Running local syntax checks on Python and JSON files…")
     static = await _validate_and_repair(db, build)
 
     # Re-inject Dockerfiles after AI edits (models sometimes overwrite compose).
@@ -1226,6 +1285,7 @@ async def repair_build_from_ci(build_id: UUID, db: Session, project_name: str) -
                 "files_targeted": len(targets)}
 
     # Re-push the corrected codebase → triggers a fresh CI run.
+    _live("push", f"Pushing {len(targets)} fixed file(s) to GitHub…")
     push_result = await push_build(build_id, db, project_name)
     if isinstance(push_result, dict) and push_result.get("error"):
         build.last_error = str(push_result["error"])[:500]

@@ -27,6 +27,11 @@ _PYTEST = re.compile(
 )
 _TSC = re.compile(r"([\w./]+\.tsx?)\(\d+,\d+\):\s+error TS\d+", re.I)
 _DOCKER_TARGET = re.compile(r"target\s+(\w+):\s+failed", re.I)
+# Invalid/unknown docker images referenced by docker-compose.
+_IMAGE_ERR = re.compile(
+    r"(?:manifest for|pull access denied for|repository|image)\s+([\w][\w./-]*(?::[\w.\-]+)?)\s+(?:not found|does not exist)",
+    re.I,
+)
 
 # Any repo-relative source path mentioned on an error line.
 _PATH_ANY = re.compile(
@@ -138,6 +143,19 @@ def parse_ci_failures(text: str) -> dict:
     ):
         if not infra:
             infra.append("dockerfile_missing")
+
+    # Invalid/unknown docker image (e.g. "manifest for foo/bar:1.3 not found",
+    # "pull access denied for x", "repository x not found"). These name no source
+    # file, so target the compose file directly to fix the bad image tag.
+    bad_images: list[str] = []
+    for im in _IMAGE_ERR.finditer(text):
+        ref = im.group(1)
+        if ref and ref not in bad_images:
+            bad_images.append(ref)
+    if bad_images:
+        note = "fix invalid/unknown docker image(s): " + ", ".join(bad_images[:5])
+        for cf in ("docker-compose.yml", "docker-compose.yaml"):
+            files.setdefault(cf, []).append(note)
 
     # Drop obvious noise (node_modules, site-packages, the runner toolcache)
     files = {
