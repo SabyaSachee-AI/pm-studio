@@ -26,6 +26,7 @@ import {
   type SRS,
   type UserResponse,
 } from "@/lib/api";
+import { copyToClipboard } from "@/lib/copyToClipboard";
 import { SrsFormalDocument } from "@/components/features/srs/SrsFormalDocument";
 import {
   FORMAL_PRINT_STYLES,
@@ -651,6 +652,13 @@ export default function SrsDetailPage() {
       ? `${window.location.origin}/portal/srs/${id}`
       : `/portal/srs/${id}`;
 
+  async function copyPortalLink() {
+    if (await copyToClipboard(portalUrl)) {
+      setPortalCopied(true);
+      window.setTimeout(() => setPortalCopied(false), 2000);
+    }
+  }
+
   const confirmedBy = String(meta.confirmed_by_name ?? pmUser?.full_name ?? "PM");
   const confirmedDate = formatSrsDocumentDate(
     typeof meta.confirmed_at === "string" ? meta.confirmed_at : undefined,
@@ -979,11 +987,7 @@ export default function SrsDetailPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(portalUrl);
-                      setPortalCopied(true);
-                      window.setTimeout(() => setPortalCopied(false), 2000);
-                    }}
+                    onClick={() => { void copyPortalLink(); }}
                   >
                     {portalCopied ? "Copied!" : "Copy"}
                   </Button>
@@ -1056,11 +1060,7 @@ export default function SrsDetailPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(portalUrl);
-                      setPortalCopied(true);
-                      window.setTimeout(() => setPortalCopied(false), 2000);
-                    }}
+                    onClick={() => { void copyPortalLink(); }}
                   >
                     {portalCopied ? "Copied!" : "Copy"}
                   </Button>

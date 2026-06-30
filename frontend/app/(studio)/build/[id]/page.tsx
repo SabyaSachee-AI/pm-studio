@@ -16,6 +16,7 @@ import { ArchModelSelector } from "@/components/ui/ArchModelSelector";
 import { CodeEditor } from "@/components/ui/CodeEditor";
 import { useAiJob } from "@/lib/hooks/useAiJob";
 import { downloadTextFile, slugFilename } from "@/lib/specMarkdown";
+import { copyToClipboard } from "@/lib/copyToClipboard";
 
 // Only states where AI/Celery is actively producing code.
 // NOTE: `qa` is intentionally NOT here — during QA we're waiting on GitHub CI
@@ -120,7 +121,14 @@ function CmdBlock({ cmd }: { cmd: string }) {
       <code className="block flex-1 overflow-x-auto whitespace-pre rounded bg-gray-950 px-2 py-1 font-mono text-xs text-emerald-300">{cmd}</code>
       <button
         type="button"
-        onClick={() => { void navigator.clipboard?.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+        onClick={() => {
+          void copyToClipboard(cmd).then((ok) => {
+            if (ok) {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            }
+          });
+        }}
         className="shrink-0 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:bg-gray-800"
       >
         {copied ? "Copied" : "Copy"}

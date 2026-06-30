@@ -30,6 +30,7 @@ import {
   type TaskSpec,
   type UserResponse,
 } from "@/lib/api";
+import { copyToClipboard } from "@/lib/copyToClipboard";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -776,8 +777,8 @@ export default function TasksPage() {
   }
 
   async function copyText(key: string, text: string) {
-    try { await navigator.clipboard.writeText(text); showCopied(key) }
-    catch { alert("Could not copy to clipboard.") }
+    if (await copyToClipboard(text)) showCopied(key);
+    else alert("Could not copy to clipboard.");
   }
 
   const projectName = projects.find((p) => p.id === projectId)?.name ?? "Project";

@@ -27,6 +27,7 @@ import {
   type Requirement,
   type UserResponse,
 } from "@/lib/api";
+import { copyToClipboard } from "@/lib/copyToClipboard";
 import {
   aiButtonClassName,
   aiButtonLabel,
@@ -601,6 +602,13 @@ export default function PrdDetailPage() {
       ? `${window.location.origin}/portal/prd/${id}`
       : `/portal/prd/${id}`;
 
+  async function copyPortalLink() {
+    if (await copyToClipboard(portalUrl)) {
+      setPortalCopied(true);
+      window.setTimeout(() => setPortalCopied(false), 2000);
+    }
+  }
+
   const confirmedBy = String(meta.confirmed_by_name ?? pmUser?.full_name ?? "PM");
   const confirmedDate = meta.confirmed_at
     ? new Date(String(meta.confirmed_at)).toLocaleDateString(undefined, {
@@ -1007,11 +1015,7 @@ export default function PrdDetailPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(portalUrl);
-                      setPortalCopied(true);
-                      window.setTimeout(() => setPortalCopied(false), 2000);
-                    }}
+                    onClick={() => { void copyPortalLink(); }}
                   >
                     {portalCopied ? "Copied!" : "Copy"}
                   </Button>
@@ -1083,11 +1087,7 @@ export default function PrdDetailPage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => {
-                      void navigator.clipboard.writeText(portalUrl);
-                      setPortalCopied(true);
-                      window.setTimeout(() => setPortalCopied(false), 2000);
-                    }}
+                    onClick={() => { void copyPortalLink(); }}
                   >
                     {portalCopied ? "Copied!" : "Copy"}
                   </Button>
