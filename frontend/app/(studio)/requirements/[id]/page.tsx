@@ -42,6 +42,7 @@ import {
   aiButtonLabel,
   useAiJob,
 } from "@/lib/hooks/useAiJob";
+import { newProgressId } from "@/lib/progressId";
 
 const STEPS = [
   { num: 1, label: "Analysis" },
@@ -446,7 +447,7 @@ export default function RequirementDetailPage() {
 
   const runSynthesize = useCallback(
     async (requirementId: string) => {
-      const progressId = crypto.randomUUID();
+      const progressId = newProgressId();
       aiJob.startManual("Synthesizing feedback", progressId);
       setManualStep(2);
 
@@ -468,7 +469,7 @@ export default function RequirementDetailPage() {
 
   const runReanalyze = useCallback(
     async (requirementId: string, instructions: string) => {
-      const progressId = crypto.randomUUID();
+      const progressId = newProgressId();
       aiJob.startManual("Rewriting requirement analysis", progressId);
       setManualStep(2);
 
@@ -1130,11 +1131,12 @@ export default function RequirementDetailPage() {
                               await refreshRequirement(id);
                               await runSynthesize(id);
                             } catch (err) {
-                              aiJob.failManual(
+                              const msg =
                                 err instanceof Error
                                   ? err.message
-                                  : "Feedback upload failed",
-                              );
+                                  : "Feedback upload failed";
+                              showToast(msg, "error");
+                              aiJob.reportError(msg, "Synthesizing feedback");
                             } finally {
                               e.target.value = "";
                             }

@@ -315,6 +315,15 @@ export function useAiJob(options: UseAiJobOptions = {}) {
     [failJob],
   );
 
+  /** Surface an error even when startManual() was never reached (e.g. pre-flight throw). */
+  const reportError = useCallback(
+    (error: string, opName?: string) => {
+      if (opName) setOperationName(opName);
+      failJob(error);
+    },
+    [failJob],
+  );
+
   useEffect(() => () => clearTimers(), [clearTimers]);
 
   const isRunning = status === "pending" || status === "processing";
@@ -334,6 +343,7 @@ export function useAiJob(options: UseAiJobOptions = {}) {
     startManual,
     completeManual,
     failManual,
+    reportError,
     reset,
     cancel,
   };
