@@ -86,15 +86,21 @@ const ARCH_DOCS = [
 function pct(n: number, d: number) { return d > 0 ? Math.round((n / d) * 100) : 0; }
 
 // One row in the Gap resolution center: shows a layer's status + the fix action.
-function GapRow({ ok, icon, label, status, hint, action }: {
-  ok: boolean; icon: string; label: string; status: string; hint: string; action?: ReactNode;
+function GapRow({ ok, step, icon, label, status, hint, action }: {
+  ok: boolean; step?: number; icon: string; label: string; status: string; hint: string; action?: ReactNode;
 }) {
   return (
     <div className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 ${
       ok ? "border-emerald-900/30 bg-emerald-950/10" : "border-amber-900/30 bg-amber-950/10"
     }`}>
       <div className="flex min-w-0 items-start gap-2.5">
-        <i className={`ti ${ok ? "ti-circle-check text-emerald-400" : `${icon} text-amber-400`} mt-0.5 text-base shrink-0`} aria-hidden />
+        {step != null ? (
+          <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+            ok ? "bg-emerald-900/50 text-emerald-300" : "bg-amber-900/50 text-amber-300"
+          }`}>{ok ? "✓" : step}</span>
+        ) : (
+          <i className={`ti ${ok ? "ti-circle-check text-emerald-400" : `${icon} text-amber-400`} mt-0.5 text-base shrink-0`} aria-hidden />
+        )}
         <div className="min-w-0">
           <p className="text-sm font-medium text-gray-200">
             {label} <span className={ok ? "text-emerald-400" : "text-amber-400"}>· {status}</span>
@@ -128,6 +134,7 @@ export default function TraceabilityPage() {
   const [error,      setError]      = useState("");
   const [expanded,   setExpanded]   = useState<Record<string, boolean>>({});
   const [solveResult,setSolveResult]= useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
 
   // Shared AI job — same ambient loop, status bar, and completion chime as the
   // Kanban "Solve gaps with AI" button, so gap-solving behaves identically
@@ -192,10 +199,47 @@ export default function TraceabilityPage() {
     } catch (e) { setError(e instanceof Error ? e.message : "Could not start reconcile"); }
   }
 
+  // "Resolve all" — run every auto-fix in dependency order, one after another.
+  const [resolveAll, setResolveAll] = useState<{ running: boolean; step: number; total: number; label: string }>(
+    { running: false, step: 0, total: 0, label: "" },
+  );
+  async function pollTaskDone(taskId: string, timeoutMs = 240000) {
+    const start = Date.now();
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 3000));
+      if (Date.now() - start > timeoutMs) return;
+      try {
+        const s = (await api.getTaskStatus(taskId)) as unknown as { status?: string };
+        if (["SUCCESS", "COMPLETED", "FAILURE", "FAILED"].includes(String(s.status || "").toUpperCase())) return;
+      } catch { /* keep polling */ }
+    }
+  }
+  async function handleResolveAll() {
+    if (!projectId || resolveAll.running) return;
+    const srsId = data?.srs?.id;
+    if (!srsId) { setError("Generate an SRS first — then all gaps can be auto-resolved."); return; }
+    setError(""); setSolveResult(null);
+    const steps: { label: string; run: () => Promise<void> }[] = [
+      { label: "Resolving requirement questions", run: async () => { await api.resolveRequirementGaps(projectId); } },
+      { label: "Adding requirements to the SRS", run: async () => { const r = await api.fillSrsGaps(projectId); await pollTaskDone(r.task_id); } },
+      { label: "Creating tasks for requirements", run: async () => { const r = await api.extractModules(projectId, srsId, { fillGapsOnly: true }); if (r.task_id) await pollTaskDone(r.task_id); } },
+      { label: "Linking orphaned tasks", run: async () => { const r = await api.linkOrphanedTasks(projectId); await pollTaskDone(r.task_id); } },
+      { label: "Reconciling tasks with architecture", run: async () => { const r = await api.reconcilePlan(projectId); await pollTaskDone(r.task_id); } },
+      { label: "Generating dev specs", run: async () => { const r = await api.generateAllSpecs(projectId, true, null); await pollTaskDone(r.task_id); } },
+    ];
+    for (let i = 0; i < steps.length; i++) {
+      setResolveAll({ running: true, step: i + 1, total: steps.length, label: steps[i].label });
+      try { await steps[i].run(); } catch { /* best-effort — continue */ }
+      await loadData(projectId);
+    }
+    setResolveAll({ running: false, step: 0, total: 0, label: "" });
+    setSolveResult("✓ Auto-resolve finished. If Architecture is still amber, generate it (heavy step, kept manual).");
+  }
+
   // True while any fix is running (drives the live auto-refresh below).
   const anyFixRunning =
     solveJob.isRunning || allSpecsJob.isRunning || archJob.isRunning ||
-    srsFillJob.isRunning || orphanJob.isRunning || reconcileJob.isRunning;
+    srsFillJob.isRunning || orphanJob.isRunning || reconcileJob.isRunning || resolveAll.running;
 
   async function handleGenerateAllSpecs() {
     if (!projectId || allSpecsJob.isRunning) return;
@@ -549,134 +593,67 @@ export default function TraceabilityPage() {
             const allClear = autoClear && orphaned === 0 && featuresNotInSrs === 0 && reqGaps === 0 && planDrift === 0;
             return (
               <div className="rounded-xl border border-indigo-900/40 bg-indigo-950/10 p-5 space-y-3">
-                <div>
-                  <h3 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-indigo-300">
-                    <i className="ti ti-wand text-base" aria-hidden /> Gap resolution center
-                  </h3>
-                  <p className="mt-1 text-xs text-gray-400">
-                    This is your one place to <strong className="text-gray-300">find</strong> and <strong className="text-gray-300">fix</strong> every gap.
-                    Work top to bottom — <span className="text-amber-400">amber</span> means action needed, <span className="text-emerald-400">green ✓</span> means that layer is complete.
-                    Fixing here uses the same engine as each screen, so nothing else changes.
-                  </p>
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wider text-indigo-300">
+                        <i className="ti ti-wand text-base" aria-hidden /> Gap resolution center
+                      </h3>
+                      <p className="mt-1 text-xs text-gray-400">
+                        Find and fix every gap here. Work <strong className="text-gray-300">top to bottom</strong> — <span className="text-amber-400">amber</span> needs action, <span className="text-emerald-400">green ✓</span> is done. Or click <strong className="text-indigo-300">Resolve all</strong> to run them in order.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => void handleResolveAll()}
+                      disabled={anyFixRunning || allClear || !data.srs}
+                      className="flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-lg hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-40 transition-colors"
+                    >
+                      <i className={`ti ${resolveAll.running ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
+                      {resolveAll.running ? `Resolving ${resolveAll.step}/${resolveAll.total}…` : "Resolve all gaps"}
+                    </button>
+                  </div>
+
+                  {(() => {
+                    const gates = [
+                      { l: "Requirement questions", ok: reqGaps === 0 },
+                      { l: "PRD features → SRS", ok: featuresNotInSrs === 0 },
+                      { l: "Requirements → tasks", ok: frMissing === 0 },
+                      { l: "Orphaned tasks", ok: orphaned === 0 },
+                      { l: "Plan consistency", ok: planDrift === 0 },
+                      { l: "Architecture", ok: archMissing === 0 },
+                      { l: "Dev specs", ok: stats.totalTasks > 0 && specsMissing === 0 },
+                    ];
+                    const passed = gates.filter((g) => g.ok).length;
+                    const nextGate = gates.find((g) => !g.ok);
+                    return (
+                      <div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-400">{passed}/{gates.length} checks passed</span>
+                          {nextGate ? <span className="text-amber-400">Next: {nextGate.l}</span> : <span className="text-emerald-400">All clear ✓</span>}
+                        </div>
+                        <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-gray-800">
+                          <div className="h-full rounded-full bg-emerald-500 transition-all duration-700" style={{ width: `${Math.round((passed / gates.length) * 100)}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {resolveAll.running && (
+                    <p className="flex items-center gap-1.5 rounded bg-indigo-950/40 px-2 py-1 text-xs text-indigo-200">
+                      <i className="ti ti-loader-2 animate-spin" aria-hidden /> {resolveAll.label} — step {resolveAll.step} of {resolveAll.total}…
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
-                  {/* 1. FR → tasks (auto-fix) */}
-                  <GapRow
-                    ok={frMissing === 0}
-                    icon="ti-list-check"
-                    label="Requirements → tasks"
-                    status={frMissing === 0 ? "every requirement has a task" : `${frMissing} requirement${frMissing > 1 ? "s" : ""} without a task`}
-                    hint="Each SRS functional requirement needs at least one Kanban task. Fix adds only the missing ones — never duplicates."
-                    action={
-                      <button onClick={() => void handleSolve()} disabled={solving || !data.srs} className={FIX_BTN}>
-                        <i className={`ti ${solving ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
-                        {solving ? "Solving…" : "Solve gaps with AI"}
-                      </button>
-                    }
-                  />
-                  {/* 2. Dev specs (auto-fix) */}
-                  <GapRow
-                    ok={stats.totalTasks > 0 && specsMissing === 0}
-                    icon="ti-file-text"
-                    label="Dev specs"
-                    status={stats.totalTasks === 0 ? "no tasks yet" : specsMissing === 0 ? "every task has a spec" : `${specsMissing} task${specsMissing > 1 ? "s" : ""} without a spec`}
-                    hint="Each task needs a technical spec before Build. Runs on the server, one by one — keeps going even if you leave."
-                    action={
-                      <button onClick={() => void handleGenerateAllSpecs()} disabled={allSpecsJob.isRunning || stats.totalTasks === 0} className={FIX_BTN}>
-                        <i className={`ti ${allSpecsJob.isRunning ? "ti-loader-2 animate-spin" : "ti-list-check"}`} aria-hidden />
-                        {allSpecsJob.isRunning ? "Generating…" : "Generate all specs"}
-                      </button>
-                    }
-                  />
-                  {/* 3. Architecture (auto-fix) */}
-                  <GapRow
-                    ok={archMissing === 0}
-                    icon="ti-sitemap"
-                    label="Architecture suite"
-                    status={`${stats.archDocs}/${ARCH_DOCS.length} documents ready`}
-                    hint="All 6 docs give tasks the right files, endpoints and tables. After generating, finalize it on the Architecture screen."
-                    action={
-                      <button onClick={() => void handleCompleteArchitecture()} disabled={archJob.isRunning} className={FIX_BTN}>
-                        <i className={`ti ${archJob.isRunning ? "ti-loader-2 animate-spin" : "ti-sitemap"}`} aria-hidden />
-                        {archJob.isRunning ? "Generating…" : "Generate architecture"}
-                      </button>
-                    }
-                  />
-                  {/* 4. Completeness meters — a derived signal that improves as the
-                       other rows are resolved; only offer Solve gaps when it helps. */}
-                  <GapRow
-                    ok={worst >= 90}
-                    icon="ti-checklist"
-                    label="Completeness (endpoints · tables · NFRs)"
-                    status={fc ? `endpoints ${fc.endpoints.pct}% · tables ${fc.tables.pct}% · NFR ${fc.nfrs.pct}%` : "no data"}
-                    hint="How well tasks cover the architecture's endpoints, tables and non-functional needs. This improves automatically as you resolve the rows above (FR tasks, SRS, orphaned, reconcile)."
-                    action={
-                      frMissing > 0 ? (
-                        <button onClick={() => void handleSolve()} disabled={solving || !data.srs} className={FIX_BTN}>
-                          <i className={`ti ${solving ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden /> Solve gaps
-                        </button>
-                      ) : (
-                        <span className="text-[11px] text-gray-500">Improves as rows above are fixed</span>
-                      )
-                    }
-                  />
-                  {/* 5. Features not in SRS (manual — needs SRS) */}
-                  <GapRow
-                    ok={featuresNotInSrs === 0}
-                    icon="ti-book"
-                    label="PRD features → SRS"
-                    status={featuresNotInSrs === 0 ? "all features are in the SRS" : `${featuresNotInSrs} feature${featuresNotInSrs > 1 ? "s" : ""} not in SRS`}
-                    hint="These PRD features have no SRS requirement. Fix writes new requirements into the SRS for them (append-only) — then Solve gaps makes their tasks."
-                    action={
-                      <button onClick={() => void handleFillSrs()} disabled={srsFillJob.isRunning} className={FIX_BTN}>
-                        <i className={`ti ${srsFillJob.isRunning ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
-                        {srsFillJob.isRunning ? "Adding…" : "Add requirements to SRS"}
-                      </button>
-                    }
-                  />
-                  {/* 6. Orphaned tasks (manual — review in Kanban) */}
-                  <GapRow
-                    ok={orphaned === 0}
-                    icon="ti-unlink"
-                    label="Orphaned tasks"
-                    status={orphaned === 0 ? "all tasks link to a requirement" : `${orphaned} task${orphaned > 1 ? "s" : ""} not linked to any FR`}
-                    hint="These tasks aren't tied to a requirement. Fix links each to the requirement it fulfils (and adds a requirement for genuinely new work) — tasks are never deleted."
-                    action={
-                      <button onClick={() => void handleLinkOrphans()} disabled={orphanJob.isRunning} className={FIX_BTN}>
-                        <i className={`ti ${orphanJob.isRunning ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
-                        {orphanJob.isRunning ? "Linking…" : "Auto-link to requirements"}
-                      </button>
-                    }
-                  />
-                  {/* 6b. Plan consistency — tasks referencing non-architecture entities */}
-                  <GapRow
-                    ok={planDrift === 0}
-                    icon="ti-git-compare"
-                    label="Plan consistency (tasks ↔ architecture)"
-                    status={planDrift === 0 ? "tasks match the architecture" : `${planDrift} task${planDrift > 1 ? "s" : ""} reference something not in the architecture`}
-                    hint="A task's endpoint/table isn't in the architecture. Fix either renames the task to the real name, or adds the missing entity to the architecture — never deletes anything."
-                    action={
-                      <button onClick={() => void handleReconcilePlan()} disabled={reconcileJob.isRunning} className={FIX_BTN}>
-                        <i className={`ti ${reconcileJob.isRunning ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
-                        {reconcileJob.isRunning ? "Reconciling…" : "Auto-reconcile"}
-                      </button>
-                    }
-                  />
-                  {planDrift > 0 && (data.plan_drift?.items?.length ?? 0) > 0 && (
-                    <p className="pl-8 text-[11px] text-gray-600">
-                      e.g. {data.plan_drift!.items.slice(0, 3).map((it) => `“${it.title}” (${it.reason})`).join("; ")}
-                      {planDrift > 3 ? ` +${planDrift - 3} more` : ""}
-                    </p>
-                  )}
-
-                  {/* 7. Requirement questions (manual — earlier stage) */}
+                  {/* 1. Requirement questions → answer (AI or manual) */}
                   <GapRow
                     ok={reqGaps === 0}
+                    step={1}
                     icon="ti-file-description"
                     label="Requirement questions"
                     status={reqGaps === 0 ? "no open questions" : `${reqGaps} open question${reqGaps > 1 ? "s" : ""}`}
-                    hint="Open points the AI found in your document. Pick either: let AI answer, or type your own — both get added to the SRS as assumptions (nothing existing changes)."
+                    hint="Open points the AI found in your document. Let AI answer, or type your own — both are added to the SRS as assumptions (nothing existing changes)."
                     action={
                       <div className="flex flex-wrap gap-2">
                         <button onClick={() => void handleResolveRequirementGaps()} disabled={reqResolving} className={FIX_BTN}>
@@ -719,9 +696,120 @@ export default function TraceabilityPage() {
                       </div>
                     </div>
                   )}
+
+                  {/* 2. PRD features → SRS (auto-fix) */}
+                  <GapRow
+                    ok={featuresNotInSrs === 0}
+                    step={2}
+                    icon="ti-book"
+                    label="PRD features → SRS"
+                    status={featuresNotInSrs === 0 ? "all features are in the SRS" : `${featuresNotInSrs} feature${featuresNotInSrs > 1 ? "s" : ""} not in SRS`}
+                    hint="These PRD features have no SRS requirement. Fix writes new requirements into the SRS for them (append-only)."
+                    action={
+                      <button onClick={() => void handleFillSrs()} disabled={srsFillJob.isRunning} className={FIX_BTN}>
+                        <i className={`ti ${srsFillJob.isRunning ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
+                        {srsFillJob.isRunning ? "Adding…" : "Add requirements to SRS"}
+                      </button>
+                    }
+                  />
+                  {/* 3. Requirements → tasks (auto-fix) */}
+                  <GapRow
+                    ok={frMissing === 0}
+                    step={3}
+                    icon="ti-list-check"
+                    label="Requirements → tasks"
+                    status={frMissing === 0 ? "every requirement has a task" : `${frMissing} requirement${frMissing > 1 ? "s" : ""} without a task`}
+                    hint="Each SRS functional requirement needs at least one Kanban task. Fix adds only the missing ones — never duplicates."
+                    action={
+                      <button onClick={() => void handleSolve()} disabled={solving || !data.srs} className={FIX_BTN}>
+                        <i className={`ti ${solving ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
+                        {solving ? "Solving…" : "Solve gaps with AI"}
+                      </button>
+                    }
+                  />
+                  {/* 4. Orphaned tasks (auto-fix) */}
+                  <GapRow
+                    ok={orphaned === 0}
+                    step={4}
+                    icon="ti-unlink"
+                    label="Orphaned tasks"
+                    status={orphaned === 0 ? "all tasks link to a requirement" : `${orphaned} task${orphaned > 1 ? "s" : ""} not linked to any FR`}
+                    hint="These tasks aren't tied to a requirement. Fix links each to the requirement it fulfils (adds one for genuinely new work) — never deletes tasks."
+                    action={
+                      <button onClick={() => void handleLinkOrphans()} disabled={orphanJob.isRunning} className={FIX_BTN}>
+                        <i className={`ti ${orphanJob.isRunning ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
+                        {orphanJob.isRunning ? "Linking…" : "Auto-link to requirements"}
+                      </button>
+                    }
+                  />
+                  {/* 5. Plan consistency — tasks ↔ architecture (auto-fix) */}
+                  <GapRow
+                    ok={planDrift === 0}
+                    step={5}
+                    icon="ti-git-compare"
+                    label="Plan consistency (tasks ↔ architecture)"
+                    status={planDrift === 0 ? "tasks match the architecture" : `${planDrift} task${planDrift > 1 ? "s" : ""} reference something not in the architecture`}
+                    hint="A task's endpoint/table isn't in the architecture. Fix renames the task to the real name, or adds the missing entity to the architecture — never deletes."
+                    action={
+                      <button onClick={() => void handleReconcilePlan()} disabled={reconcileJob.isRunning} className={FIX_BTN}>
+                        <i className={`ti ${reconcileJob.isRunning ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
+                        {reconcileJob.isRunning ? "Reconciling…" : "Auto-reconcile"}
+                      </button>
+                    }
+                  />
+                  {planDrift > 0 && (data.plan_drift?.items?.length ?? 0) > 0 && (
+                    <p className="pl-8 text-[11px] text-gray-600">
+                      e.g. {data.plan_drift!.items.slice(0, 3).map((it) => `“${it.title}” (${it.reason})`).join("; ")}
+                      {planDrift > 3 ? ` +${planDrift - 3} more` : ""}
+                    </p>
+                  )}
+                  {/* 6. Architecture suite (auto-fix) */}
+                  <GapRow
+                    ok={archMissing === 0}
+                    step={6}
+                    icon="ti-sitemap"
+                    label="Architecture suite"
+                    status={`${stats.archDocs}/${ARCH_DOCS.length} documents ready`}
+                    hint="All 6 docs give tasks the right files, endpoints and tables. After generating, finalize it on the Architecture screen."
+                    action={
+                      <button onClick={() => void handleCompleteArchitecture()} disabled={archJob.isRunning} className={FIX_BTN}>
+                        <i className={`ti ${archJob.isRunning ? "ti-loader-2 animate-spin" : "ti-sitemap"}`} aria-hidden />
+                        {archJob.isRunning ? "Generating…" : "Generate architecture"}
+                      </button>
+                    }
+                  />
+                  {/* 7. Dev specs (auto-fix) */}
+                  <GapRow
+                    ok={stats.totalTasks > 0 && specsMissing === 0}
+                    step={7}
+                    icon="ti-file-text"
+                    label="Dev specs"
+                    status={stats.totalTasks === 0 ? "no tasks yet" : specsMissing === 0 ? "every task has a spec" : `${specsMissing} task${specsMissing > 1 ? "s" : ""} without a spec`}
+                    hint="Each task needs a technical spec before Build. Runs on the server, one by one — keeps going even if you leave."
+                    action={
+                      <button onClick={() => void handleGenerateAllSpecs()} disabled={allSpecsJob.isRunning || stats.totalTasks === 0} className={FIX_BTN}>
+                        <i className={`ti ${allSpecsJob.isRunning ? "ti-loader-2 animate-spin" : "ti-list-check"}`} aria-hidden />
+                        {allSpecsJob.isRunning ? "Generating…" : "Generate all specs"}
+                      </button>
+                    }
+                  />
+
+                  {/* Completeness — a derived read-out (improves as the rows above are fixed) */}
+                  <div className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs ${
+                    worst >= 90 ? "border-gray-800 bg-gray-950/40" : "border-gray-800 bg-gray-950/40"
+                  }`}>
+                    <span className="text-gray-500">
+                      <i className="ti ti-checklist mr-1.5" aria-hidden /> Completeness readout:{" "}
+                      {fc ? <>endpoints <b className="text-gray-300">{fc.endpoints.pct}%</b> · tables <b className="text-gray-300">{fc.tables.pct}%</b> · NFR <b className="text-gray-300">{fc.nfrs.pct}%</b></> : "no data"}
+                    </span>
+                    <span className="text-gray-600">improves automatically as rows 1–7 are fixed</span>
+                  </div>
                 </div>
 
                 {/* live progress for the fixes started here */}
+                {solveJob.isVisible && (
+                  <AiStatusBar {...aiJobStatusBarProps(solveJob)} operationName={solveJob.operationName || "Solving gaps with AI"} processingMessage={(solveJob.taskMeta?.message as string | undefined) ?? solveJob.processingMessage} onCancel={solveJob.cancel} />
+                )}
                 {allSpecsJob.isVisible && (
                   <AiStatusBar {...aiJobStatusBarProps(allSpecsJob)} operationName={allSpecsJob.operationName || "Generating all specs"} onCancel={allSpecsJob.cancel} />
                 )}
@@ -736,6 +824,12 @@ export default function TraceabilityPage() {
                 )}
                 {reconcileJob.isVisible && (
                   <AiStatusBar {...aiJobStatusBarProps(reconcileJob)} operationName={reconcileJob.operationName || "Reconciling tasks with architecture"} onCancel={reconcileJob.cancel} />
+                )}
+
+                {solveResult && !anyFixRunning && (
+                  <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-4 py-2.5 text-sm text-emerald-300">
+                    <i className="ti ti-circle-check mr-2" aria-hidden />{solveResult}
+                  </div>
                 )}
 
                 {allClear ? (
@@ -761,97 +855,19 @@ export default function TraceabilityPage() {
             );
           })()}
 
-          {/* ── Gap analysis + solve panel ────────────────────────────── */}
-          <div className={`rounded-xl border p-5 space-y-4 ${
-            stats.cov.missing_frs.length > 0
-              ? "border-amber-800/30 bg-amber-950/10"
-              : "border-emerald-800/30 bg-emerald-950/10"
-          }`}>
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="space-y-1 flex-1">
-                <h3 className={`flex items-center gap-2 text-sm font-semibold uppercase tracking-wider ${
-                  stats.cov.missing_frs.length > 0 ? "text-amber-400" : "text-emerald-400"
-                }`}>
-                  <i className={`ti ${stats.cov.missing_frs.length > 0 ? "ti-alert-triangle" : "ti-circle-check"} text-base`} aria-hidden />
-                  {stats.cov.missing_frs.length > 0
-                    ? `Gap detected — ${stats.cov.missing_frs.length} FR${stats.cov.missing_frs.length > 1 ? "s" : ""} without tasks`
-                    : "Full coverage — all FRs have tasks"}
-                </h3>
+          {/* ── Detailed traceability (optional inspection) ───────────── */}
+          <button
+            onClick={() => setShowDetails((v) => !v)}
+            className="flex w-full items-center justify-between rounded-xl border border-gray-800 bg-gray-900/40 px-4 py-3 text-sm text-gray-300 hover:bg-gray-900/70 transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <i className="ti ti-search text-gray-500" aria-hidden />
+              Detailed traceability — completeness, architecture docs, the PRD→FR→task tree, orphaned tasks &amp; requirement gaps
+            </span>
+            <i className={`ti ${showDetails ? "ti-chevron-up" : "ti-chevron-down"} text-gray-500`} aria-hidden />
+          </button>
 
-                {stats.cov.missing_frs.length > 0 ? (
-                  <p className="text-sm text-gray-300">
-                    The following functional requirements have no Kanban task. Click <strong className="text-amber-300">Solve gaps</strong> to generate
-                    only the missing tasks — existing tasks will <em>never</em> be duplicated or removed.
-                  </p>
-                ) : (
-                  <p className="text-sm text-gray-400">
-                    Every SRS functional requirement maps to at least one Kanban task. No action needed.
-                  </p>
-                )}
-
-                {/* Missing FR chips */}
-                {stats.cov.missing_frs.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {stats.cov.missing_frs.map((frId) => {
-                      const fr = data.srs?.functional_requirements.find((f) => f.id === frId);
-                      return (
-                        <span key={frId}
-                          title={fr?.title ?? frId}
-                          className="rounded border border-amber-800/40 bg-amber-950/30 px-2 py-0.5 font-mono text-[11px] text-amber-300">
-                          {frId}
-                          {fr ? ` — ${fr.title.slice(0, 30)}${fr.title.length > 30 ? "…" : ""}` : ""}
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {stats.cov.missing_frs.length > 0 && (
-                <button
-                  onClick={() => void handleSolve()}
-                  disabled={solving || !data.srs}
-                  className="shrink-0 flex items-center gap-2 rounded-lg bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-amber-500 disabled:bg-amber-900/40 disabled:cursor-not-allowed transition-all shadow-lg"
-                >
-                  {solving
-                    ? <><i className="ti ti-loader-2 animate-spin text-base" aria-hidden /> Solving…</>
-                    : <><i className="ti ti-wand text-base" aria-hidden /> Solve gaps with AI</>}
-                </button>
-              )}
-            </div>
-
-            {/* Solve progress — shared AI status bar (ambient + chime) */}
-            {solveJob.isVisible && (
-              <AiStatusBar
-                {...aiJobStatusBarProps(solveJob)}
-                operationName={solveJob.operationName || "Solving gaps with AI"}
-                processingMessage={
-                  (solveJob.taskMeta?.message as string | undefined) ??
-                  solveJob.processingMessage
-                }
-                onCancel={solveJob.cancel}
-              />
-            )}
-
-            {/* Solve result */}
-            {solveResult && !solving && (
-              <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-4 py-2.5 text-sm text-emerald-300">
-                <i className="ti ti-circle-check mr-2" aria-hidden />{solveResult}
-              </div>
-            )}
-
-            {/* Architecture incomplete warning */}
-            {stats.archDocs < ARCH_DOCS.length && (
-              <div className="flex items-start gap-2.5 rounded-lg border border-amber-900/20 bg-amber-950/10 p-3 text-xs text-amber-400">
-                <i className="ti ti-info-circle text-base mt-0.5 shrink-0" aria-hidden />
-                <p>
-                  Architecture suite is incomplete ({stats.archDocs}/{ARCH_DOCS.length} docs ready).
-                  Generated tasks may lack suggested files, endpoints, and tables until the architecture is finalized.
-                  <a href="/architecture" className="ml-1 underline hover:text-amber-300">Complete architecture →</a>
-                </p>
-              </div>
-            )}
-          </div>
+          {showDetails && (<div className="space-y-6">
 
           {/* ── Completeness coverage (multi-dimensional) ─────────────── */}
           {data.full_coverage ? (
@@ -1127,6 +1143,8 @@ export default function TraceabilityPage() {
               </div>
             </div>
           )}
+
+          </div>)}
 
         </div>
       )}
