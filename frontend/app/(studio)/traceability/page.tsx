@@ -154,7 +154,7 @@ export default function TraceabilityPage() {
       } catch {
         setSolveResult("✓ Gap solution finished — matrix refreshed.");
       }
-      loadData(projectId);
+      loadData(projectId, true);
     },
   });
   const solving = solveJob.isRunning;
@@ -165,13 +165,13 @@ export default function TraceabilityPage() {
   const allSpecsJob = useAiJob({
     onComplete: () => {
       try { localStorage.removeItem(specsMemKey(projectId)); } catch { /* ignore */ }
-      loadData(projectId);
+      loadData(projectId, true);
     },
     onFailed: () => { try { localStorage.removeItem(specsMemKey(projectId)); } catch { /* ignore */ } },
   });
-  const archJob = useAiJob({ onComplete: () => loadData(projectId) });
-  const srsFillJob = useAiJob({ onComplete: () => { setSolveResult("✓ SRS updated — new requirements added. Now run 'Solve gaps' to create their tasks."); loadData(projectId); } });
-  const orphanJob = useAiJob({ onComplete: () => { setSolveResult("✓ Orphaned tasks linked to requirements."); loadData(projectId); } });
+  const archJob = useAiJob({ onComplete: () => loadData(projectId, true) });
+  const srsFillJob = useAiJob({ onComplete: () => { setSolveResult("✓ SRS updated — new requirements added. Now run 'Solve gaps' to create their tasks."); loadData(projectId, true); } });
+  const orphanJob = useAiJob({ onComplete: () => { setSolveResult("✓ Orphaned tasks linked to requirements."); loadData(projectId, true); } });
 
   async function handleFillSrs() {
     if (!projectId || srsFillJob.isRunning) return;
@@ -189,7 +189,7 @@ export default function TraceabilityPage() {
       orphanJob.startJob(task_id, "Linking orphaned tasks");
     } catch (e) { setError(e instanceof Error ? e.message : "Could not start orphan linking"); }
   }
-  const reconcileJob = useAiJob({ onComplete: () => { setSolveResult("✓ Tasks and architecture reconciled."); loadData(projectId); } });
+  const reconcileJob = useAiJob({ onComplete: () => { setSolveResult("✓ Tasks and architecture reconciled."); loadData(projectId, true); } });
   async function handleReconcilePlan() {
     if (!projectId || reconcileJob.isRunning) return;
     setError("");
@@ -230,7 +230,7 @@ export default function TraceabilityPage() {
     for (let i = 0; i < steps.length; i++) {
       setResolveAll({ running: true, step: i + 1, total: steps.length, label: steps[i].label });
       try { await steps[i].run(); } catch { /* best-effort — continue */ }
-      await loadData(projectId);
+      await loadData(projectId, true);
     }
     setResolveAll({ running: false, step: 0, total: 0, label: "" });
     setSolveResult("✓ Auto-resolve finished. If Architecture is still amber, generate it (heavy step, kept manual).");
@@ -265,7 +265,7 @@ export default function TraceabilityPage() {
       const r = await api.resolveRequirementGaps(projectId, answers);
       setSolveResult(`✓ ${r.message}`);
       setShowManualReq(false);
-      loadData(projectId);
+      loadData(projectId, true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not resolve requirement questions");
     } finally {
@@ -333,20 +333,25 @@ export default function TraceabilityPage() {
   }
 
   // ── data loading ────────────────────────────────────────────────────────────
-  const loadData = useCallback((pid: string) => {
+  // `silent` = background refresh: don't toggle the full-page loader (no blink)
+  // and don't reset the user's expand state — just update the data in place.
+  const loadData = useCallback(async (pid: string, silent = false) => {
     if (!pid) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError("");
-    api.getTraceability(pid)
-      .then((d) => {
-        setData(d as unknown as TraceabilityData);
-        // auto-expand all features
+    try {
+      const d = (await api.getTraceability(pid)) as unknown as TraceabilityData;
+      setData(d);
+      if (!silent) {
         const exp: Record<string, boolean> = {};
-        (d as unknown as TraceabilityData).prd?.features.forEach((f) => { exp[f.id] = true; });
+        d.prd?.features.forEach((f) => { exp[f.id] = true; });
         setExpanded(exp);
-      })
-      .catch((e: Error) => setError(e.message || "Failed to load traceability"))
-      .finally(() => setLoading(false));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load traceability");
+    } finally {
+      if (!silent) setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -359,13 +364,13 @@ export default function TraceabilityPage() {
     });
   }, []);
 
-  useEffect(() => { if (projectId) loadData(projectId); }, [projectId, loadData]);
+  useEffect(() => { if (projectId) void loadData(projectId); }, [projectId, loadData]);
 
   // While any fix runs, refresh the matrix every few seconds so rows turn green
   // (and buttons become ✓ Done) as soon as the server-side work finishes.
   useEffect(() => {
     if (!projectId || !anyFixRunning) return;
-    const t = setInterval(() => loadData(projectId), 5000);
+    const t = setInterval(() => loadData(projectId, true), 5000);
     return () => clearInterval(t);
   }, [projectId, anyFixRunning, loadData]);
 
@@ -506,7 +511,7 @@ export default function TraceabilityPage() {
             className="flex items-center gap-1.5 rounded-lg border border-indigo-800/40 px-3 py-2 text-sm text-indigo-400 hover:bg-indigo-950/20 transition-colors">
             <i className="ti ti-columns text-sm" aria-hidden /> Kanban
           </a>
-          <button onClick={() => loadData(projectId)}
+          <button onClick={() => void loadData(projectId)}
             className="flex items-center gap-1.5 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-400 hover:bg-gray-900 transition-colors">
             <i className="ti ti-refresh text-sm" aria-hidden /> Refresh
           </button>
