@@ -686,16 +686,24 @@ export default function TraceabilityPage() {
                 )}
 
                 {allClear ? (
-                  <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-4 py-2.5 text-sm text-emerald-300">
-                    <i className="ti ti-circle-check mr-2" aria-hidden />
-                    All gaps resolved — your project is complete and ready to <a href={`/build?project=${projectId}`} className="underline">Build</a>.
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-700/50 bg-emerald-950/30 px-4 py-3">
+                    <p className="text-sm font-medium text-emerald-300">
+                      <i className="ti ti-circle-check mr-2" aria-hidden />
+                      All gaps resolved — your project plan is complete and traceable. You can build now.
+                    </p>
+                    <a
+                      href={`/build?project=${projectId}`}
+                      className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-lg hover:bg-emerald-500 transition-colors"
+                    >
+                      <i className="ti ti-code" aria-hidden /> Go to Build <i className="ti ti-arrow-right" aria-hidden />
+                    </a>
                   </div>
-                ) : autoClear ? (
-                  <div className="rounded-lg border border-amber-800/30 bg-amber-950/10 px-4 py-2.5 text-xs text-amber-300">
-                    <i className="ti ti-info-circle mr-2" aria-hidden />
-                    Auto-fixable gaps are done. The remaining items above need a quick manual review (links provided).
+                ) : (
+                  <div className="rounded-lg border border-gray-800 bg-gray-950/40 px-4 py-2.5 text-xs text-gray-500">
+                    <i className="ti ti-lock mr-2" aria-hidden />
+                    Resolve the <span className="text-amber-400">amber</span> items above — the <strong className="text-gray-400">Go to Build</strong> button appears here once every gap is green.
                   </div>
-                ) : null}
+                )}
               </div>
             );
           })()}
