@@ -1165,6 +1165,9 @@ export class ApiClient {
       body: JSON.stringify({ answers: answers ?? null }),
     });
   }
+  async suggestRequirementAnswers(projectId: string): Promise<{ answers: string[] }> {
+    return this.request(`/tasks/suggest-requirement-answers/${projectId}`, { method: "POST" });
+  }
   async fillSrsGaps(projectId: string): Promise<{ task_id: string; status: string }> {
     return this.request(`/tasks/fill-srs-gaps/${projectId}`, { method: "POST" });
   }

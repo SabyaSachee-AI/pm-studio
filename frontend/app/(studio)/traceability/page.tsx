@@ -273,12 +273,31 @@ export default function TraceabilityPage() {
     }
   }
 
-  function openManualReq() {
-    // Pre-fill each answer with the AI's suggestion so the user can edit or keep it.
+  const [suggestingReq, setSuggestingReq] = useState(false);
+  async function suggestReqAnswers() {
+    if (!projectId) return;
+    setSuggestingReq(true);
+    try {
+      const r = await api.suggestRequirementAnswers(projectId);
+      setManualAnswers((prev) => {
+        const next = { ...prev };
+        (r.answers ?? []).forEach((a, i) => { if (a && a.trim()) next[i] = a; });
+        return next;
+      });
+    } catch { /* keep whatever is there */ } finally {
+      setSuggestingReq(false);
+    }
+  }
+  async function openManualReq() {
+    // Seed with any existing suggestion, open the editor, then have AI fill blanks.
+    const gaps = data?.requirement?.gaps ?? [];
     const seed: Record<number, string> = {};
-    (data?.requirement?.gaps ?? []).forEach((g, i) => { seed[i] = g.auto_answer ?? ""; });
+    gaps.forEach((g, i) => { seed[i] = g.auto_answer ?? ""; });
     setManualAnswers(seed);
     setShowManualReq(true);
+    if (gaps.length && gaps.every((g) => !g.auto_answer)) {
+      void suggestReqAnswers();  // auto-suggest when nothing is pre-filled
+    }
   }
 
   function applyManualAnswers() {
@@ -670,9 +689,17 @@ export default function TraceabilityPage() {
                   {/* Manual answer editor — pre-filled with the AI's suggestions */}
                   {showManualReq && (data.requirement?.gaps.length ?? 0) > 0 && (
                     <div className="rounded-lg border border-indigo-800/40 bg-gray-950/60 p-3 space-y-2">
-                      <p className="text-xs text-gray-400">
-                        Edit any answer (pre-filled with the AI's suggestion), then apply. Each becomes an SRS assumption. Leave one blank to skip it.
-                      </p>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-xs text-gray-400">
+                          {suggestingReq
+                            ? "AI is suggesting an answer for each question…"
+                            : "AI has suggested answers below. Edit any you want, then apply. Each becomes an SRS assumption; leave one blank to skip it."}
+                        </p>
+                        <button onClick={() => void suggestReqAnswers()} disabled={suggestingReq || reqResolving} className={LINK_BTN}>
+                          <i className={`ti ${suggestingReq ? "ti-loader-2 animate-spin" : "ti-sparkles"}`} aria-hidden />
+                          {suggestingReq ? "Suggesting…" : "Re-suggest with AI"}
+                        </button>
+                      </div>
                       {data.requirement!.gaps.map((g, i) => (
                         <div key={i} className="space-y-1">
                           <p className="text-[11px] text-gray-300">
@@ -682,13 +709,13 @@ export default function TraceabilityPage() {
                           <input
                             value={manualAnswers[i] ?? g.auto_answer ?? ""}
                             onChange={(e) => setManualAnswers((p) => ({ ...p, [i]: e.target.value }))}
-                            placeholder="Your answer…"
+                            placeholder={suggestingReq ? "AI is thinking…" : "Your answer…"}
                             className="w-full rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200"
                           />
                         </div>
                       ))}
                       <div className="flex flex-wrap gap-2 pt-1">
-                        <button onClick={applyManualAnswers} disabled={reqResolving} className={FIX_BTN}>
+                        <button onClick={applyManualAnswers} disabled={reqResolving || suggestingReq} className={FIX_BTN}>
                           <i className={`ti ${reqResolving ? "ti-loader-2 animate-spin" : "ti-check"}`} aria-hidden />
                           {reqResolving ? "Applying…" : "Apply my answers to SRS"}
                         </button>

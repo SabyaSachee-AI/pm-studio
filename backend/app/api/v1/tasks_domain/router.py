@@ -417,6 +417,53 @@ class ResolveRequirementGapsBody(BaseModel):
     answers: list[str] | None = None
 
 
+class _RequirementAnswerSet(BaseModel):
+    answers: list[str] = []
+
+
+@router.post("/suggest-requirement-answers/{project_id}")
+async def suggest_requirement_answers(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> dict:
+    """AI-suggest a concise default answer for each open requirement question, so
+    the manual editor is pre-filled and the user only edits what they want."""
+    from app.services.ai.base import ai_call  # noqa: PLC0415
+
+    req = (await db.execute(
+        select(Requirement)
+        .where(Requirement.project_id == project_id, Requirement.deleted_at.is_(None))
+        .order_by(Requirement.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    unresolved = [g for g in ((req.analysis_result if req else None) or {}).get("gaps", []) if not g.get("resolved")]
+    if not unresolved:
+        return {"answers": []}
+
+    project = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
+    questions = [(g.get("question") or g.get("description") or "").strip() for g in unresolved]
+    numbered = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(questions))
+    prompt = (
+        f"Project: {project.name if project else 'the project'}\n\n"
+        "Answer each open question below with a concise, sensible default (1–2 sentences) "
+        "that a senior engineer would choose for this kind of project — something safe to "
+        "record as an assumption. Return the answers in the SAME order, one per question.\n\n"
+        f"QUESTIONS:\n{numbered}"
+    )
+    try:
+        result = await ai_call(
+            prompt=prompt, response_model=_RequirementAnswerSet,
+            system="You propose sensible default decisions for open project questions.",
+            max_tokens=3000, task_type="req_analyze", screen="tasks",
+        )
+        answers = list(result.answers)[:len(questions)]
+    except Exception:  # noqa: BLE001
+        answers = []
+    # pad to the number of questions so the UI aligns
+    answers += [""] * (len(questions) - len(answers))
+    return {"answers": answers}
+
+
 @router.post("/resolve-requirement-gaps/{project_id}")
 async def resolve_requirement_gaps(
     project_id: UUID,
