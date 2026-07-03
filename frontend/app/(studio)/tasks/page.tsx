@@ -708,8 +708,14 @@ export default function TasksPage() {
 
   // "Generate all specs" — one server-side job that generates every task's spec
   // serially; keeps running even if the tab closes. Individual buttons unchanged.
+  const allSpecsKey = (pid: string) => `specs-all:${pid}`;
+  const clearAllSpecsMemory = useCallback((pid: string) => {
+    try { localStorage.removeItem(allSpecsKey(pid)); } catch { /* ignore */ }
+  }, []);
+
   const allSpecsJob = useAiJob({
-    onComplete: async () => { await loadBoard(projectId); },
+    onComplete: async () => { clearAllSpecsMemory(projectId); await loadBoard(projectId); },
+    onFailed: () => { clearAllSpecsMemory(projectId); },
   });
 
   async function handleGenerateAllSpecs() {
@@ -719,11 +725,45 @@ export default function TasksPage() {
     )) return;
     try {
       const { task_id } = await api.generateAllSpecs(projectId, true, specModel);
+      // Remember the running job so a refresh/reopen re-shows the progress bar.
+      try { localStorage.setItem(allSpecsKey(projectId), JSON.stringify({ task_id, at: Date.now() })); } catch { /* ignore */ }
       allSpecsJob.startJob(task_id, "Generating all specs");
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "Could not start bulk spec generation");
     }
   }
+
+  // On load / project switch: if a bulk-spec job is still running on the server,
+  // re-attach the progress bar (survives refresh + reopening the tab).
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(allSpecsKey(projectId)); } catch { raw = null; }
+    if (!raw) return;
+    let stored: { task_id?: string; at?: number } = {};
+    try { stored = JSON.parse(raw); } catch { stored = { task_id: raw }; }
+    const tid = stored.task_id;
+    // Forget anything older than 60 min (safety against a forgotten job).
+    if (!tid || (stored.at && Date.now() - stored.at > 60 * 60 * 1000)) {
+      clearAllSpecsMemory(projectId);
+      return;
+    }
+    (async () => {
+      try {
+        const s = (await api.getTaskStatus(tid)) as unknown as { status?: string };
+        const st = String(s.status || "").toUpperCase();
+        if (cancelled) return;
+        if (["SUCCESS", "COMPLETED", "FAILURE", "FAILED"].includes(st)) {
+          clearAllSpecsMemory(projectId);
+          return;
+        }
+        if (!allSpecsJob.isRunning) allSpecsJob.startJob(tid, "Generating all specs");
+      } catch { /* ignore — leave memory for a later retry */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   const extractBtn = aiButtonLabel("Generate tasks", extractJob.status, extractJob.operationName === "Extracting modules");
 
