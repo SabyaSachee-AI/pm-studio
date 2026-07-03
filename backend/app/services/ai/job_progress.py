@@ -97,6 +97,13 @@ def publish_job_progress(**meta: Any) -> None:
     except Exception:
         logger.debug("Could not publish Celery job progress", exc_info=True)
 
+    try:
+        from app.services.build.job_progress import persist_build_job_meta  # noqa: PLC0415
+
+        persist_build_job_meta(meta)
+    except Exception:
+        logger.debug("Could not persist build job progress", exc_info=True)
+
     progress_id = _sync_progress_key.get()
     if progress_id:
         _write_sync_progress(progress_id, meta)

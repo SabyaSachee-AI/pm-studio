@@ -57,6 +57,7 @@ function mapCeleryStatus(raw: string): AiJobStatus {
   if (status === "SUCCESS" || status === "COMPLETED") return "completed";
   if (status === "FAILURE" || status === "FAILED") return "failed";
   if (status === "PENDING" || status === "RETRY") return "pending";
+  if (status === "STARTED" || status === "PROGRESS") return "processing";
   return "processing";
 }
 

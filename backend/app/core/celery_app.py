@@ -37,6 +37,9 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    # Report STARTED as soon as a worker picks up a task (Build UI no longer stuck on QUEUED).
+    task_track_started=True,
+    result_extended=True,
     # Long-running code builds go to a dedicated queue so they never block PRD/SRS/
     # architecture jobs. Run a second worker for it:
     #   celery -A app.core.celery_app worker -Q build --pool=solo -n build@%h
@@ -62,10 +65,18 @@ def _register_worker_hooks(**kwargs: object) -> None:
             return
         if "build" not in queues:
             return
-        from app.workers.build_tasks import resume_orphaned_auto_ci  # noqa: PLC0415
+        from app.workers.build_tasks import (  # noqa: PLC0415
+            resume_orphaned_auto_ci,
+            resume_orphaned_build_jobs,
+        )
 
-        n = resume_orphaned_auto_ci()
-        if n:
+        n_ci = resume_orphaned_auto_ci()
+        n_build = resume_orphaned_build_jobs()
+        if n_ci or n_build:
             import logging  # noqa: PLC0415
 
-            logging.getLogger(__name__).info("Resumed %s orphaned auto-CI watcher(s)", n)
+            logging.getLogger(__name__).info(
+                "Resumed %s orphaned auto-CI watcher(s), %s build job(s)",
+                n_ci,
+                n_build,
+            )

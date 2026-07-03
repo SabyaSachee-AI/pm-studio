@@ -31,6 +31,8 @@ async def get_job_status(task_id: str) -> dict:
     response: dict = {"task_id": task_id, "status": result.status}
     if isinstance(result.info, dict) and result.info:
         response["meta"] = result.info
+    elif result.status == "STARTED":
+        response["meta"] = {"phase": "starting", "message": "Worker picked up the job…"}
     if result.status == "SUCCESS":
         response["result"] = result.result
     elif result.status == "FAILURE":

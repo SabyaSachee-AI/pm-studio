@@ -671,6 +671,10 @@ async def build_scaffold(build_id: UUID, db: Session, project_info: dict[str, An
 
     build.status = BuildStatus.scaffolding
     build.last_error = None
+    build.generation_progress = {
+        "phase": "scaffolding",
+        "message": "Scaffolding repository…",
+    }
     db.commit()
 
     prompt = (

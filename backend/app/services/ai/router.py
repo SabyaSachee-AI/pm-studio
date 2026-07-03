@@ -372,6 +372,12 @@ class AiRouter:
         if not models_in_chain:
             raise RuntimeError(f"Empty model chain for {task_type}, tier={tier}")
 
+        publish_job_progress(
+            phase="starting",
+            message="Selecting AI model…",
+            attempt=0,
+        )
+
         last_error: str | None = None
         timeout_sec = _task_timeout_sec(task_type)
 
@@ -383,6 +389,12 @@ class AiRouter:
                     provider,
                     model,
                     extra={"tier": tier, "attempt": attempt_num},
+                )
+                publish_job_progress(
+                    phase="rate_limited",
+                    message=f"{model_display_name(model)} cooling down — trying next model…",
+                    current_model=model_display_name(model),
+                    attempt=attempt_num,
                 )
                 continue
 

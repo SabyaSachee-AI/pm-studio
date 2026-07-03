@@ -17,6 +17,7 @@ from app.services.build.service import (
     generate_build_code,
     generate_single_task_code,
 )
+from app.services.build.job_progress import build_job_scope, emit_build_task_progress
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,9 @@ def scaffold_build_task(
 ) -> dict[str, Any]:
     """Stage 0 — generate the repo skeleton."""
     set_model_override(model_provider, model_id)
+    emit_build_task_progress(
+        self, phase="scaffolding", message="Scaffolding repository…",
+    )
     db = SyncSessionLocal()
     build: Build | None = None
     try:
@@ -68,7 +72,8 @@ def scaffold_build_task(
             return {"error": "Build not found"}
         build.generation_task_id = self.request.id
         db.commit()
-        return _run_async(build_scaffold(UUID(build_id), db, _project_info(db, build)))
+        with build_job_scope(build_id):
+            return _run_async(build_scaffold(UUID(build_id), db, _project_info(db, build)))
     except Exception as exc:  # noqa: BLE001
         logger.exception("Scaffold failed")
         if build is not None:
@@ -115,6 +120,9 @@ def generate_build_task(
     and picks up from the last completed task. The user never clicks Resume.
     """
     set_model_override(model_provider, model_id)
+    emit_build_task_progress(
+        self, phase="generating", message="Starting code generation…",
+    )
     db = SyncSessionLocal()
     build: Build | None = None
     result: dict[str, Any] | None = None
@@ -128,7 +136,8 @@ def generate_build_task(
         build.generation_task_id = self.request.id
         _remember_model(db, build, model_provider, model_id)
         db.commit()
-        result = _run_async(generate_build_code(UUID(build_id), db, resume=resume))
+        with build_job_scope(build_id):
+            result = _run_async(generate_build_code(UUID(build_id), db, resume=resume))
         # Result-level failure (in-run retries exhausted) → auto-resume.
         if isinstance(result, dict) and result.get("status") == "failed":
             needs_resume = True
@@ -411,6 +420,70 @@ def _schedule_auto_ci(
         if polls == 0 and not continue_chain:
             release_auto_ci(build_id)
         raise
+
+
+def resume_orphaned_build_jobs() -> int:
+    """Re-enqueue scaffold/generate jobs lost when the build worker restarted."""
+    from celery.result import AsyncResult  # noqa: PLC0415
+
+    from app.core.celery_app import celery_app  # noqa: PLC0415
+
+    def _task_is_live(task_id: str) -> bool:
+        try:
+            insp = celery_app.control.inspect(timeout=2.0)
+            for bucket in (insp.active() or {}, insp.reserved() or {}):
+                for worker_tasks in bucket.values():
+                    for t in worker_tasks:
+                        if t.get("id") == task_id:
+                            return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+    db = SyncSessionLocal()
+    resumed = 0
+    now = datetime.now(timezone.utc)
+    try:
+        builds = db.query(Build).filter(
+            Build.deleted_at.is_(None),
+            Build.status.in_([BuildStatus.scaffolding, BuildStatus.generating]),
+        ).all()
+        for build in builds:
+            tid = build.generation_task_id
+            if not tid or _task_is_live(tid):
+                continue
+            ar = AsyncResult(tid, app=celery_app)
+            if ar.status in ("SUCCESS", "FAILURE"):
+                continue
+            gp = dict(build.generation_progress or {})
+            hb = gp.get("heartbeat_at")
+            stale = False
+            if isinstance(hb, str):
+                try:
+                    hb_dt = datetime.fromisoformat(hb.replace("Z", "+00:00"))
+                    stale = (now - hb_dt).total_seconds() > 120
+                except ValueError:
+                    stale = True
+            else:
+                updated = build.updated_at
+                if updated.tzinfo is None:
+                    updated = updated.replace(tzinfo=timezone.utc)
+                stale = (now - updated).total_seconds() > 180
+            if not stale:
+                continue
+            if build.status == BuildStatus.scaffolding:
+                task = scaffold_build_task.delay(str(build.id))
+            else:
+                task = generate_build_task.delay(str(build.id), resume=True)
+            build.generation_task_id = task.id
+            gp["message"] = "Resuming after worker restart…"
+            build.generation_progress = gp
+            db.commit()
+            resumed += 1
+            logger.info("Re-enqueued orphaned build job for %s (was %s)", build.id, tid)
+    finally:
+        db.close()
+    return resumed
 
 
 def resume_orphaned_auto_ci() -> int:

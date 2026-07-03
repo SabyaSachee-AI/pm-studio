@@ -176,23 +176,34 @@ export default function BuildWorkspacePage() {
     const tid = build.generation_task_id;
     if (attached.current.has(tid)) return;
     attached.current.add(tid);
-    aiJob.startJob(tid, "Generating code");
+    const opName =
+      build.status === "scaffolding"
+        ? "Scaffolding repository"
+        : build.status === "generating"
+          ? "Generating code"
+          : "Build job";
+    aiJob.startJob(tid, opName);
   }, [build, aiJob]);
 
-  // Poll while generating
+  // Poll while a build job is active (status or task id)
   useEffect(() => {
-    if (!build || !GENERATING.has(build.status)) return;
+    if (!build) return;
+    const active =
+      GENERATING.has(build.status) ||
+      Boolean(build.generation_task_id && aiJob.isRunning);
+    if (!active) return;
     const t = setInterval(() => { void refresh(); }, 3000);
     return () => clearInterval(t);
-  }, [build, refresh]);
+  }, [build, aiJob.isRunning, refresh]);
 
-  // Clear a generation bar stuck on QUEUED: happens when the page re-attaches to
-  // a finished run that Celery has forgotten (reports PENDING forever). Never
-  // clears an actively generating build.
+  // Clear a generation bar stuck on QUEUED only when the build is truly finished.
+  // Never reset while scaffolding/generating — Celery may stay PENDING until PROGRESS.
   useEffect(() => {
     if (aiJob.status !== "pending") return;
+    const stillWorking = build ? GENERATING.has(build.status) : false;
+    if (stillWorking) return;
     const terminal = build ? (build.status === "ready" || build.status === "failed") : false;
-    if (terminal || aiJob.elapsedSeconds > 75) aiJob.reset();
+    if (terminal || aiJob.elapsedSeconds > 120) aiJob.reset();
   }, [aiJob.status, aiJob.elapsedSeconds, build?.status, aiJob.reset]);
 
   async function openFile(f: GeneratedFileListItem) {
@@ -496,6 +507,13 @@ export default function BuildWorkspacePage() {
 
   const progress = build.generation_progress as Record<string, unknown> | null;
   const liveMessage = (progress?.message as string | undefined) ?? aiJob.processingMessage;
+  const progressModel =
+    typeof progress?.current_model === "string" ? progress.current_model : undefined;
+  const buildJobActive = GENERATING.has(build.status);
+  const effectiveJobStatus =
+    buildJobActive && (aiJob.status === "pending" || aiJob.status === "idle")
+      ? "processing"
+      : aiJob.status;
 
   return (
     <div className="flex h-[calc(100vh-1rem)] flex-col gap-3 p-4">
@@ -801,7 +819,10 @@ export default function BuildWorkspacePage() {
       ) : null}
 
       {isGenerating || aiJob.isVisible ? (() => {
-        const barProps = aiJobStatusBarProps(aiJob);
+        const barProps = aiJobStatusBarProps({
+          ...aiJob,
+          status: effectiveJobStatus,
+        });
         const selectedModel = buildModel ? `${buildModel.provider} / ${buildModel.model}` : "Auto (best free model)";
         const op = (aiJob.operationName || "").toLowerCase();
         const nextStep =
@@ -818,7 +839,7 @@ export default function BuildWorkspacePage() {
             {...barProps}
             operationName={aiJob.operationName || "Generating code"}
             processingMessage={liveMessage}
-            currentModel={barProps.currentModel || selectedModel}
+            currentModel={barProps.currentModel || progressModel || selectedModel}
             nextStep={nextStep}
             onCancel={aiJob.cancel}
           />

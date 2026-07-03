@@ -209,7 +209,13 @@ async def scaffold_build(
 ) -> dict[str, str]:
     build = await _load_build(build_id, db)
     task = scaffold_build_task.delay(str(build.id), model_provider=model_provider, model_id=model_id)
+    build.status = BuildStatus.scaffolding
     build.generation_task_id = task.id
+    build.last_error = None
+    build.generation_progress = {
+        "phase": "scaffolding",
+        "message": "Queued — starting scaffold…",
+    }
     await db.commit()
     return {"build_id": str(build.id), "task_id": task.id, "status": "scaffolding"}
 
@@ -227,7 +233,12 @@ async def generate_build(
     task = generate_build_task.delay(
         str(build.id), resume=resume, model_provider=model_provider, model_id=model_id
     )
+    build.status = BuildStatus.generating
     build.generation_task_id = task.id
+    build.last_error = None
+    gp = dict(build.generation_progress or {}) if resume else {}
+    gp.update({"phase": "generating", "message": "Queued — starting code generation…"})
+    build.generation_progress = gp
     await db.commit()
     return {"build_id": str(build.id), "task_id": task.id, "status": "generating"}
 
