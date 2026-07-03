@@ -590,17 +590,22 @@ export default function TraceabilityPage() {
                       </button>
                     }
                   />
-                  {/* 4. Completeness meters (improves via Solve gaps) */}
+                  {/* 4. Completeness meters — a derived signal that improves as the
+                       other rows are resolved; only offer Solve gaps when it helps. */}
                   <GapRow
                     ok={worst >= 90}
                     icon="ti-checklist"
                     label="Completeness (endpoints · tables · NFRs)"
                     status={fc ? `endpoints ${fc.endpoints.pct}% · tables ${fc.tables.pct}% · NFR ${fc.nfrs.pct}%` : "no data"}
-                    hint="How well tasks cover the architecture's endpoints, tables and non-functional needs. Improves after you Solve gaps above."
+                    hint="How well tasks cover the architecture's endpoints, tables and non-functional needs. This improves automatically as you resolve the rows above (FR tasks, SRS, orphaned, reconcile)."
                     action={
-                      <button onClick={() => void handleSolve()} disabled={solving || !data.srs} className={FIX_BTN}>
-                        <i className="ti ti-wand" aria-hidden /> Improve via Solve gaps
-                      </button>
+                      frMissing > 0 ? (
+                        <button onClick={() => void handleSolve()} disabled={solving || !data.srs} className={FIX_BTN}>
+                          <i className={`ti ${solving ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden /> Solve gaps
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-gray-500">Improves as rows above are fixed</span>
+                      )
                     }
                   />
                   {/* 5. Features not in SRS (manual — needs SRS) */}
