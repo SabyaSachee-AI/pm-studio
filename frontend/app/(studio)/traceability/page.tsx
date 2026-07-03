@@ -218,6 +218,9 @@ export default function TraceabilityPage() {
     if (!projectId || resolveAll.running) return;
     const srsId = data?.srs?.id;
     if (!srsId) { setError("Generate an SRS first — then all gaps can be auto-resolved."); return; }
+    if (!window.confirm(
+      "Resolve all gaps?\n\nThis runs every auto-fix in order:\n1) Requirement questions\n2) Add requirements to SRS\n3) Create tasks\n4) Link orphaned tasks\n5) Reconcile with architecture\n6) Generate all specs\n\nIt may take a few minutes and continues on the server. Existing work is never removed.",
+    )) return;
     setError(""); setSolveResult(null);
     const steps: { label: string; run: () => Promise<void> }[] = [
       { label: "Resolving requirement questions", run: async () => { await api.resolveRequirementGaps(projectId); } },
@@ -233,7 +236,22 @@ export default function TraceabilityPage() {
       await loadData(projectId, true);
     }
     setResolveAll({ running: false, step: 0, total: 0, label: "" });
-    setSolveResult("✓ Auto-resolve finished. If Architecture is still amber, generate it (heavy step, kept manual).");
+    const fresh = await api.getTraceability(projectId).catch(() => null) as unknown as TraceabilityData | null;
+    const remaining = fresh ? [
+      (fresh.requirement?.gaps.length ?? 0) > 0 && "requirement questions",
+      (fresh.coverage?.missing_frs?.length ?? 0) > 0 && "requirement tasks",
+      fresh.architecture && Object.values(fresh.architecture.docs || {}).filter((d) => d.has_content || d.status === "completed" || d.status === "generated").length < 6 && "architecture",
+    ].filter(Boolean) as string[] : [];
+    setSolveResult(
+      remaining.length === 0
+        ? "✓ All gaps resolved — you can Build now."
+        : `✓ Auto-resolve finished. Still needs attention: ${remaining.join(", ")} (e.g. architecture is a heavier step — use its own button).`,
+    );
+    window.alert(
+      remaining.length === 0
+        ? "✓ All gaps resolved — you can Build now."
+        : `Auto-resolve finished.\nStill amber: ${remaining.join(", ")}.\nHandle those with their own buttons.`,
+    );
   }
 
   // True while any fix is running (drives the live auto-refresh below).

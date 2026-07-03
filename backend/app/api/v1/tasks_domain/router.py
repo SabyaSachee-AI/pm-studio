@@ -526,8 +526,9 @@ async def resolve_requirement_gaps(
         srs.content_json = content
         applied_to.append("SRS")
 
-    for g in ar.get("gaps") or []:
-        g["resolved"] = True
+    # Rebuild the gaps list with fresh dicts so the JSONB change is always detected
+    # and persisted (a shared/nested mutation can otherwise be missed by the ORM).
+    ar["gaps"] = [{**g, "resolved": True} for g in (ar.get("gaps") or [])]
     if req is not None:
         req.analysis_result = ar
 
