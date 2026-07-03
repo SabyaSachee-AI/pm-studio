@@ -65,6 +65,90 @@ def _git_commit_block_for(db, task: Task) -> str | None:
     )
 
 
+@celery_app.task(bind=True, name="spec.generate_all")
+def generate_all_specs_task(
+    self,
+    project_id: str,
+    only_missing: bool = True,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, object]:
+    """Generate specs for every task in a project, one at a time (serially).
+
+    Reuses the exact per-task generator (`generate_spec_task`) so each spec is
+    produced identically to the individual button. Runs entirely on the worker,
+    so it keeps going even if the browser tab is closed. Reports live progress
+    via Celery task meta (current/total) for the status bar.
+    """
+    db = SyncSessionLocal()
+    try:
+        tasks = (
+            db.query(Task)
+            .filter(
+                Task.project_id == UUID(project_id),
+                Task.deleted_at.is_(None),
+                Task.order_index.notin_(list(SYSTEM_TASK_ORDERS)),
+            )
+            .order_by(Task.order_index.asc())
+            .all()
+        )
+        total = len(tasks)
+        generated = failed = skipped = 0
+
+        def _emit(i: int, title: str) -> None:
+            self.update_state(state="PROGRESS", meta={
+                "current": i, "total": total,
+                "message": f"Spec {i}/{total}: {title}",
+                "generated": generated, "failed": failed, "skipped": skipped,
+                "current_model": (f"{model_provider} / {model_id}"
+                                  if model_provider and model_id else "Auto model chain"),
+            })
+
+        for i, task in enumerate(tasks, 1):
+            spec = (
+                db.query(TaskSpec)
+                .filter(TaskSpec.task_id == task.id, TaskSpec.deleted_at.is_(None))
+                .first()
+            )
+            # Skip tasks that already have a finished spec (unless regenerating all).
+            if only_missing and spec is not None \
+                    and spec.status == TaskSpecStatus.ready and spec.content_json:
+                skipped += 1
+                _emit(i, task.title)
+                continue
+
+            # Ensure a usable spec row (create or reset) — mirrors _queue_spec_generation.
+            if spec is None:
+                spec = TaskSpec(task_id=task.id, status=TaskSpecStatus.pending, content_json=None)
+                db.add(spec)
+            else:
+                spec.deleted_at = None
+                if spec.status != TaskSpecStatus.failed or not (spec.content_json or {}).get("_generation_progress"):
+                    spec.content_json = None if spec.status != TaskSpecStatus.failed else spec.content_json
+                spec.status = TaskSpecStatus.pending
+                spec.generation_task_id = None
+            db.commit()
+            db.refresh(spec)
+
+            _emit(i, task.title)
+            result = generate_spec_task(str(spec.id), model_provider, model_id)  # in-process, serial
+            if isinstance(result, dict) and result.get("error"):
+                failed += 1
+            else:
+                generated += 1
+
+        return {
+            "status": "completed", "total": total,
+            "generated": generated, "failed": failed, "skipped": skipped,
+            "message": f"Done — {generated} generated, {skipped} skipped, {failed} failed.",
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Generate-all specs failed", extra={"project_id": project_id})
+        return {"error": str(exc)[:500], "status": "failed"}
+    finally:
+        db.close()
+
+
 @celery_app.task(name="spec.generate")
 def generate_spec_task(
     task_spec_id: str,

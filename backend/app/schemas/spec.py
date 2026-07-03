@@ -85,6 +85,11 @@ class SpecRegenerateRequest(BaseModel):
     task_id: UUID
 
 
+class SpecGenerateAllRequest(BaseModel):
+    project_id: UUID
+    only_missing: bool = True
+
+
 class SpecAssignRequest(BaseModel):
     assigned_to_id: UUID
 

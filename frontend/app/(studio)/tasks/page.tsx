@@ -706,6 +706,25 @@ export default function TasksPage() {
     onFailed: () => { pendingSpecRef.current = null; setSpecLoadingTaskId(null) },
   });
 
+  // "Generate all specs" — one server-side job that generates every task's spec
+  // serially; keeps running even if the tab closes. Individual buttons unchanged.
+  const allSpecsJob = useAiJob({
+    onComplete: async () => { await loadBoard(projectId); },
+  });
+
+  async function handleGenerateAllSpecs() {
+    if (!projectId || allSpecsJob.isRunning) return;
+    if (!window.confirm(
+      "Generate specs for all tasks that don't have one yet?\n\nRuns on the server, one task at a time — it keeps going even if you close this tab. Individual specs are unaffected.",
+    )) return;
+    try {
+      const { task_id } = await api.generateAllSpecs(projectId, true, specModel);
+      allSpecsJob.startJob(task_id, "Generating all specs");
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : "Could not start bulk spec generation");
+    }
+  }
+
   const extractBtn = aiButtonLabel("Generate tasks", extractJob.status, extractJob.operationName === "Extracting modules");
 
   const loadBoard = useCallback(async (pid: string) => {
@@ -1082,6 +1101,16 @@ export default function TasksPage() {
         >
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
+        <button
+          type="button"
+          onClick={() => void handleGenerateAllSpecs()}
+          disabled={!projectId || allSpecsJob.isRunning || totalTasks === 0}
+          title="Generate a spec for every task that doesn't have one — runs on the server, one task at a time (keeps going even if you close this tab)"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-indigo-700 bg-indigo-900/40 px-3 py-1.5 text-sm text-indigo-200 hover:bg-indigo-900/60 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <i className={`ti ${allSpecsJob.isRunning ? "ti-loader-2 animate-spin" : "ti-list-check"}`} aria-hidden />
+          {allSpecsJob.isRunning ? "Generating all specs…" : "Generate all specs"}
+        </button>
       </div>
 
       {/* Dashboard */}
@@ -1102,6 +1131,15 @@ export default function TasksPage() {
           {...aiJobStatusBarProps(extractJob)}
           onCancel={extractJob.cancel}
           onTryAgain={() => void handleGenerateTasks()}
+        />
+      )}
+
+      {allSpecsJob.isVisible && (
+        <AiStatusBar
+          {...aiJobStatusBarProps(allSpecsJob)}
+          operationName={allSpecsJob.operationName || "Generating all specs"}
+          nextStep="Each task's spec is generated one by one — this continues on the server even if you close the tab."
+          onCancel={allSpecsJob.cancel}
         />
       )}
 

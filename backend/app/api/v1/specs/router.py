@@ -14,13 +14,14 @@ from app.models.task_spec import TaskSpec, TaskSpecStatus
 from app.models.user import User
 from app.schemas.spec import (
     SpecAssignRequest,
+    SpecGenerateAllRequest,
     SpecGenerateRequest,
     SpecRegenerateRequest,
     SpecUpdateRequest,
     TaskSpecResponse,
 )
 from app.services.notification.service import create_notification
-from app.workers.spec_tasks import generate_spec_task
+from app.workers.spec_tasks import generate_all_specs_task, generate_spec_task
 
 router = APIRouter(prefix="/specs", tags=["Specs"])
 
@@ -130,6 +131,28 @@ async def generate_spec(
         model_provider=model_provider,
         model_id=model_id,
     )
+
+
+@router.post("/generate-all", status_code=status.HTTP_202_ACCEPTED)
+async def generate_all_specs(
+    body: SpecGenerateAllRequest,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> dict[str, str]:
+    """Generate specs for every task in the project, one at a time, on the worker.
+
+    Runs independently of the browser (survives tab close). Individual per-task
+    generation is unaffected — this reuses the same generator serially.
+    """
+    celery_task = generate_all_specs_task.delay(
+        str(body.project_id),
+        only_missing=body.only_missing,
+        model_provider=model_provider,
+        model_id=model_id,
+    )
+    return {"task_id": celery_task.id, "status": "queued"}
 
 
 @router.post("/regenerate", status_code=status.HTTP_202_ACCEPTED)

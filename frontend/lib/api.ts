@@ -1183,6 +1183,15 @@ export class ApiClient {
       },
     );
   }
+  async generateAllSpecs(projectId: string, onlyMissing = true, model?: ModelChoice | null) {
+    return this.request<{ task_id: string; status: string }>(
+      `/specs/generate-all${this.modelQS(model)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ project_id: projectId, only_missing: onlyMissing }),
+      },
+    );
+  }
   async getSpec(specId: string): Promise<TaskSpec> {
     return this.request(`/specs/${specId}`);
   }
