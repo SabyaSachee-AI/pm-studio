@@ -1165,6 +1165,12 @@ export class ApiClient {
       body: JSON.stringify({ answers: answers ?? null }),
     });
   }
+  async fillSrsGaps(projectId: string): Promise<{ task_id: string; status: string }> {
+    return this.request(`/tasks/fill-srs-gaps/${projectId}`, { method: "POST" });
+  }
+  async linkOrphanedTasks(projectId: string): Promise<{ task_id: string; status: string }> {
+    return this.request(`/tasks/link-orphaned-tasks/${projectId}`, { method: "POST" });
+  }
   async getTaskCoverage(projectId: string): Promise<{
     total_frs: number;
     covered_frs: number;

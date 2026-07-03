@@ -496,6 +496,34 @@ async def resolve_requirement_gaps(
     }
 
 
+@router.post("/fill-srs-gaps/{project_id}", status_code=status.HTTP_202_ACCEPTED)
+async def fill_srs_gaps(
+    project_id: UUID,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> dict[str, str]:
+    """Append SRS functional requirements for PRD features that have none (append-only)."""
+    from app.workers.gap_tasks import fill_srs_gaps_task  # noqa: PLC0415
+    task = fill_srs_gaps_task.delay(str(project_id), model_provider, model_id)
+    return {"task_id": task.id, "status": "queued"}
+
+
+@router.post("/link-orphaned-tasks/{project_id}", status_code=status.HTTP_202_ACCEPTED)
+async def link_orphaned_tasks(
+    project_id: UUID,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> dict[str, str]:
+    """Link orphaned tasks to the requirements they fulfil (adds FRs for new scope)."""
+    from app.workers.gap_tasks import link_orphaned_tasks_task  # noqa: PLC0415
+    task = link_orphaned_tasks_task.delay(str(project_id), model_provider, model_id)
+    return {"task_id": task.id, "status": "queued"}
+
+
 @router.get("/traceability/{project_id}")
 async def get_project_traceability(
     project_id: UUID,

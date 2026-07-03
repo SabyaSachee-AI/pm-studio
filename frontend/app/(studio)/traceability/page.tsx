@@ -162,6 +162,25 @@ export default function TraceabilityPage() {
     onFailed: () => { try { localStorage.removeItem(specsMemKey(projectId)); } catch { /* ignore */ } },
   });
   const archJob = useAiJob({ onComplete: () => loadData(projectId) });
+  const srsFillJob = useAiJob({ onComplete: () => { setSolveResult("✓ SRS updated — new requirements added. Now run 'Solve gaps' to create their tasks."); loadData(projectId); } });
+  const orphanJob = useAiJob({ onComplete: () => { setSolveResult("✓ Orphaned tasks linked to requirements."); loadData(projectId); } });
+
+  async function handleFillSrs() {
+    if (!projectId || srsFillJob.isRunning) return;
+    setError("");
+    try {
+      const { task_id } = await api.fillSrsGaps(projectId);
+      srsFillJob.startJob(task_id, "Adding requirements to SRS");
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not start SRS gap-fill"); }
+  }
+  async function handleLinkOrphans() {
+    if (!projectId || orphanJob.isRunning) return;
+    setError("");
+    try {
+      const { task_id } = await api.linkOrphanedTasks(projectId);
+      orphanJob.startJob(task_id, "Linking orphaned tasks");
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not start orphan linking"); }
+  }
 
   async function handleGenerateAllSpecs() {
     if (!projectId || allSpecsJob.isRunning) return;
@@ -579,8 +598,13 @@ export default function TraceabilityPage() {
                     icon="ti-book"
                     label="PRD features → SRS"
                     status={featuresNotInSrs === 0 ? "all features are in the SRS" : `${featuresNotInSrs} feature${featuresNotInSrs > 1 ? "s" : ""} not in SRS`}
-                    hint="These PRD features have no SRS requirement yet. Regenerate/expand the SRS so they get requirements."
-                    action={<a href={`/srs?project=${projectId}`} className={LINK_BTN}><i className="ti ti-external-link" aria-hidden /> Open SRS</a>}
+                    hint="These PRD features have no SRS requirement. Fix writes new requirements into the SRS for them (append-only) — then Solve gaps makes their tasks."
+                    action={
+                      <button onClick={() => void handleFillSrs()} disabled={srsFillJob.isRunning} className={FIX_BTN}>
+                        <i className={`ti ${srsFillJob.isRunning ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
+                        {srsFillJob.isRunning ? "Adding…" : "Add requirements to SRS"}
+                      </button>
+                    }
                   />
                   {/* 6. Orphaned tasks (manual — review in Kanban) */}
                   <GapRow
@@ -588,8 +612,13 @@ export default function TraceabilityPage() {
                     icon="ti-unlink"
                     label="Orphaned tasks"
                     status={orphaned === 0 ? "all tasks link to a requirement" : `${orphaned} task${orphaned > 1 ? "s" : ""} not linked to any FR`}
-                    hint="These tasks aren't tied to a requirement — open Kanban to link them to an FR or remove them."
-                    action={<a href={`/tasks?project=${projectId}`} className={LINK_BTN}><i className="ti ti-external-link" aria-hidden /> Open Kanban</a>}
+                    hint="These tasks aren't tied to a requirement. Fix links each to the requirement it fulfils (and adds a requirement for genuinely new work) — tasks are never deleted."
+                    action={
+                      <button onClick={() => void handleLinkOrphans()} disabled={orphanJob.isRunning} className={FIX_BTN}>
+                        <i className={`ti ${orphanJob.isRunning ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
+                        {orphanJob.isRunning ? "Linking…" : "Auto-link to requirements"}
+                      </button>
+                    }
                   />
                   {/* 7. Requirement questions (manual — earlier stage) */}
                   <GapRow
@@ -648,6 +677,12 @@ export default function TraceabilityPage() {
                 )}
                 {archJob.isVisible && (
                   <AiStatusBar {...aiJobStatusBarProps(archJob)} operationName={archJob.operationName || "Generating architecture"} onCancel={archJob.cancel} />
+                )}
+                {srsFillJob.isVisible && (
+                  <AiStatusBar {...aiJobStatusBarProps(srsFillJob)} operationName={srsFillJob.operationName || "Adding requirements to SRS"} onCancel={srsFillJob.cancel} />
+                )}
+                {orphanJob.isVisible && (
+                  <AiStatusBar {...aiJobStatusBarProps(orphanJob)} operationName={orphanJob.operationName || "Linking orphaned tasks"} onCancel={orphanJob.cancel} />
                 )}
 
                 {allClear ? (

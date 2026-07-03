@@ -27,6 +27,7 @@ celery_app = Celery(
         "app.workers.architecture_tasks",
         "app.workers.orchestration_tasks",
         "app.workers.build_tasks",
+        "app.workers.gap_tasks",
     ],
 )
 
