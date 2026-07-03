@@ -113,6 +113,60 @@ def _meter(total: int, covered: int, missing: list[str]) -> dict[str, Any]:
     }
 
 
+def _norm_ep(v: str) -> str:
+    """Normalize an endpoint path for comparison (drop base/version/params)."""
+    s = str(v or "").lower().strip()
+    segs = [x for x in s.split("/") if x and not x.startswith("{") and x not in ("api", "v1", "")]
+    return "/".join(segs[-2:]) if segs else s
+
+
+def _norm_tbl(v: str) -> str:
+    s = str(v or "").lower().strip().replace(" ", "_")
+    return s[:-1] if s.endswith("s") else s
+
+
+def compute_plan_drift(arch: Any, tasks: list[Any]) -> dict[str, Any]:
+    """Tasks that reference an endpoint/table NOT present in the architecture.
+
+    Low-noise: only flags a task when its *structured* suggested_endpoint /
+    suggested_table has NO fuzzy match among the architecture's entities. Tasks
+    with no suggested entity (cross-cutting work) are never flagged.
+    """
+    if not arch:
+        return {"count": 0, "items": []}
+    ep_set = {_norm_ep(_endpoint_key(ep)) for ep in ((getattr(arch, "doc_api", None) or {}).get("endpoints") or [])}
+    ep_set |= {_norm_ep(ep.get("full_path") or ep.get("path") or "") for ep in ((getattr(arch, "doc_api", None) or {}).get("endpoints") or [])}
+    tbl_set = {_norm_tbl(t.get("name") or "") for t in ((getattr(arch, "doc_database", None) or {}).get("tables") or [])}
+    ep_set.discard("")
+    tbl_set.discard("")
+    # If the architecture declares no entities at all, we can't judge drift.
+    if not ep_set and not tbl_set:
+        return {"count": 0, "items": []}
+
+    items: list[dict[str, Any]] = []
+    for t in tasks:
+        sug_ep = str(getattr(t, "suggested_endpoint", "") or "").strip()
+        sug_tbl = str(getattr(t, "suggested_table", "") or "").strip()
+        reasons: list[str] = []
+        if sug_ep and ep_set:
+            n = _norm_ep(sug_ep)
+            if n and not any(n == e or n in e or e in n for e in ep_set):
+                reasons.append(f"endpoint '{sug_ep}'")
+        if sug_tbl and tbl_set:
+            n = _norm_tbl(sug_tbl)
+            if n and not any(n == tb or n in tb or tb in n for tb in tbl_set):
+                reasons.append(f"table '{sug_tbl}'")
+        if reasons:
+            items.append({
+                "task_id": str(getattr(t, "id", "")),
+                "title": getattr(t, "title", ""),
+                "suggested_endpoint": sug_ep or None,
+                "suggested_table": sug_tbl or None,
+                "reason": " and ".join(reasons),
+            })
+    return {"count": len(items), "items": items[:50]}
+
+
 def compute_full_coverage(
     srs_content: dict[str, Any] | None,
     arch: Any,

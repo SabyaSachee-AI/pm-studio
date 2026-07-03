@@ -32,6 +32,7 @@ from app.services.task.bible_builder import build_project_bible
 from app.services.task.coverage import (
     compute_coverage,
     compute_full_coverage,
+    compute_plan_drift,
     covered_fr_ids,
     extract_fr_ids,
     normalize_fr_id,
@@ -524,6 +525,20 @@ async def link_orphaned_tasks(
     return {"task_id": task.id, "status": "queued"}
 
 
+@router.post("/reconcile-plan/{project_id}", status_code=status.HTTP_202_ACCEPTED)
+async def reconcile_plan(
+    project_id: UUID,
+    model_provider: str | None = None,
+    model_id: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> dict[str, str]:
+    """Reconcile tasks that reference entities not in the architecture (append-only)."""
+    from app.workers.gap_tasks import reconcile_plan_task  # noqa: PLC0415
+    task = reconcile_plan_task.delay(str(project_id), model_provider, model_id)
+    return {"task_id": task.id, "status": "queued"}
+
+
 @router.get("/traceability/{project_id}")
 async def get_project_traceability(
     project_id: UUID,
@@ -690,6 +705,8 @@ async def get_project_traceability(
     coverage = compute_coverage(srs.content_json if srs else None, tasks)
     # Multi-dimensional completeness: FR + API endpoints + DB tables + NFRs.
     full_coverage = compute_full_coverage(srs.content_json if srs else None, arch, tasks)
+    # Tasks that reference entities not present in the architecture (plan drift).
+    plan_drift = compute_plan_drift(arch, tasks)
 
     return {
         "project_id":   str(project_id),
@@ -701,4 +718,5 @@ async def get_project_traceability(
         "tasks":        tasks_data,
         "coverage":     coverage,
         "full_coverage": full_coverage,
+        "plan_drift":   plan_drift,
     }

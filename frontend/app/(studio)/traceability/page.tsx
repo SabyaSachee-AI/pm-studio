@@ -51,6 +51,7 @@ interface TraceabilityData {
     tables: Meter;
     nfrs: Meter;
   };
+  plan_drift?: { count: number; items: { task_id: string; title: string; reason: string }[] };
 }
 
 interface Meter { total: number; covered: number; missing: string[]; pct: number }
@@ -180,6 +181,15 @@ export default function TraceabilityPage() {
       const { task_id } = await api.linkOrphanedTasks(projectId);
       orphanJob.startJob(task_id, "Linking orphaned tasks");
     } catch (e) { setError(e instanceof Error ? e.message : "Could not start orphan linking"); }
+  }
+  const reconcileJob = useAiJob({ onComplete: () => { setSolveResult("✓ Tasks and architecture reconciled."); loadData(projectId); } });
+  async function handleReconcilePlan() {
+    if (!projectId || reconcileJob.isRunning) return;
+    setError("");
+    try {
+      const { task_id } = await api.reconcilePlan(projectId);
+      reconcileJob.startJob(task_id, "Reconciling tasks with architecture");
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not start reconcile"); }
   }
 
   async function handleGenerateAllSpecs() {
@@ -521,8 +531,9 @@ export default function TraceabilityPage() {
             const reqGaps = data.requirement?.gaps.length ?? 0;
             const fc = data.full_coverage;
             const worst = fc ? Math.min(fc.endpoints.pct, fc.tables.pct, fc.nfrs.pct) : 100;
+            const planDrift = data.plan_drift?.count ?? 0;
             const autoClear = frMissing === 0 && specsMissing === 0 && archMissing === 0;
-            const allClear = autoClear && orphaned === 0 && featuresNotInSrs === 0 && reqGaps === 0;
+            const allClear = autoClear && orphaned === 0 && featuresNotInSrs === 0 && reqGaps === 0 && planDrift === 0;
             return (
               <div className="rounded-xl border border-indigo-900/40 bg-indigo-950/10 p-5 space-y-3">
                 <div>
@@ -620,6 +631,27 @@ export default function TraceabilityPage() {
                       </button>
                     }
                   />
+                  {/* 6b. Plan consistency — tasks referencing non-architecture entities */}
+                  <GapRow
+                    ok={planDrift === 0}
+                    icon="ti-git-compare"
+                    label="Plan consistency (tasks ↔ architecture)"
+                    status={planDrift === 0 ? "tasks match the architecture" : `${planDrift} task${planDrift > 1 ? "s" : ""} reference something not in the architecture`}
+                    hint="A task's endpoint/table isn't in the architecture. Fix either renames the task to the real name, or adds the missing entity to the architecture — never deletes anything."
+                    action={
+                      <button onClick={() => void handleReconcilePlan()} disabled={reconcileJob.isRunning} className={FIX_BTN}>
+                        <i className={`ti ${reconcileJob.isRunning ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
+                        {reconcileJob.isRunning ? "Reconciling…" : "Auto-reconcile"}
+                      </button>
+                    }
+                  />
+                  {planDrift > 0 && (data.plan_drift?.items?.length ?? 0) > 0 && (
+                    <p className="pl-8 text-[11px] text-gray-600">
+                      e.g. {data.plan_drift!.items.slice(0, 3).map((it) => `“${it.title}” (${it.reason})`).join("; ")}
+                      {planDrift > 3 ? ` +${planDrift - 3} more` : ""}
+                    </p>
+                  )}
+
                   {/* 7. Requirement questions (manual — earlier stage) */}
                   <GapRow
                     ok={reqGaps === 0}
@@ -683,6 +715,9 @@ export default function TraceabilityPage() {
                 )}
                 {orphanJob.isVisible && (
                   <AiStatusBar {...aiJobStatusBarProps(orphanJob)} operationName={orphanJob.operationName || "Linking orphaned tasks"} onCancel={orphanJob.cancel} />
+                )}
+                {reconcileJob.isVisible && (
+                  <AiStatusBar {...aiJobStatusBarProps(reconcileJob)} operationName={reconcileJob.operationName || "Reconciling tasks with architecture"} onCancel={reconcileJob.cancel} />
                 )}
 
                 {allClear ? (

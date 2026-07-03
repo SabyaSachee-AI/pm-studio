@@ -17,13 +17,14 @@ from pydantic import BaseModel
 
 from app.core.celery_app import celery_app
 from app.core.database import SyncSessionLocal
+from app.models.architecture import Architecture
 from app.models.prd import PRD
 from app.models.srs import SRS
 from app.models.task import Task
 from app.services.ai.base import ai_call
 from app.services.ai.model_override import clear_model_override, set_model_override
 from app.services.prd.source import get_finalized_prd_body
-from app.services.task.coverage import normalize_fr_id
+from app.services.task.coverage import compute_plan_drift, normalize_fr_id
 from app.services.task.system_prompts import SYSTEM_TASK_ORDERS
 
 logger = logging.getLogger(__name__)
@@ -246,6 +247,119 @@ def link_orphaned_tasks_task(
                 "message": f"Linked {linked} task(s) to requirements ({new_frs} new FR(s) added)."}
     except Exception as exc:  # noqa: BLE001
         logger.exception("link_orphaned_tasks failed")
+        return {"error": str(exc)[:400]}
+    finally:
+        db.close()
+        clear_model_override()
+
+
+# ── Stage 4: reconcile tasks that reference entities not in the architecture ─
+
+class _Reconcile(BaseModel):
+    task_id: str
+    action: str = "ignore"   # align | add | ignore
+    kind: str = ""           # endpoint | table
+    target: str = ""         # align: existing arch name; add: value to append
+
+
+class _ReconcileSet(BaseModel):
+    decisions: list[_Reconcile] = []
+
+
+@celery_app.task(bind=True, name="gap.reconcile_plan")
+def reconcile_plan_task(
+    self, project_id: str, model_provider: str | None = None, model_id: str | None = None,
+) -> dict[str, Any]:
+    """Reconcile tasks whose endpoint/table isn't in the architecture. For each,
+    AI decides: align the task to an existing arch entity (rename), or append the
+    entity to the architecture (append-only), or ignore. Nothing is deleted."""
+    set_model_override(model_provider, model_id)
+    db = SyncSessionLocal()
+    try:
+        arch = (
+            db.query(Architecture)
+            .filter(Architecture.project_id == UUID(project_id), Architecture.deleted_at.is_(None))
+            .order_by(Architecture.created_at.desc()).first()
+        )
+        if not arch:
+            return {"error": "No architecture found."}
+        tasks = (
+            db.query(Task)
+            .filter(Task.project_id == UUID(project_id), Task.deleted_at.is_(None),
+                    Task.order_index.notin_(list(SYSTEM_TASK_ORDERS)))
+            .all()
+        )
+        drift = compute_plan_drift(arch, tasks)
+        items = drift.get("items") or []
+        if not items:
+            return {"status": "ok", "changed": 0, "message": "No plan drift — tasks match the architecture."}
+
+        by_id = {str(t.id): t for t in tasks}
+        endpoints = list((arch.doc_api or {}).get("endpoints") or [])
+        tables = list((arch.doc_database or {}).get("tables") or [])
+        ep_names = ", ".join(str(e.get("full_path") or e.get("path") or "") for e in endpoints[:60])
+        tbl_names = ", ".join(str(t.get("name") or "") for t in tables[:60])
+        drift_block = "\n".join(
+            f"- task_id={it['task_id']} | {it['title']} | references {it['reason']}"
+            for it in items
+        )
+        prompt = (
+            f"ARCHITECTURE ENDPOINTS: {ep_names or '(none)'}\n"
+            f"ARCHITECTURE TABLES: {tbl_names or '(none)'}\n\n"
+            f"TASKS REFERENCING SOMETHING NOT IN THE ARCHITECTURE:\n{drift_block}\n\n"
+            "For each task decide ONE:\n"
+            "- action='align', kind='endpoint'|'table', target=<the EXISTING architecture name it really means> "
+            "(when it's just a naming mismatch)\n"
+            "- action='add', kind='endpoint'|'table', target=<the value to ADD to the architecture> "
+            "(when the task is right and the architecture is missing it)\n"
+            "- action='ignore' (when it's cross-cutting and needs no entity)\n"
+            "Return one decision per task_id."
+        )
+        result = _run(ai_call(
+            prompt=prompt, response_model=_ReconcileSet,
+            system="You keep the task plan and the architecture consistent, append-only.",
+            max_tokens=4000, task_type="module_extract", screen="tasks",
+        ))
+
+        aligned = added = 0
+        arch_changed = False
+        for d in result.decisions:
+            t = by_id.get((d.task_id or "").strip())
+            if not t or d.action not in ("align", "add") or not d.target.strip():
+                continue
+            tgt = d.target.strip()
+            if d.action == "align":
+                if d.kind == "table":
+                    t.suggested_table = tgt
+                else:
+                    t.suggested_endpoint = tgt
+                aligned += 1
+            elif d.action == "add":
+                if d.kind == "table":
+                    if not any(str(x.get("name", "")).lower() == tgt.lower() for x in tables):
+                        tables.append({"name": tgt, "columns": [], "_added_by": "plan-reconcile"})
+                        arch_changed = True
+                        added += 1
+                else:
+                    if not any(str(x.get("full_path") or x.get("path") or "") == tgt for x in endpoints):
+                        endpoints.append({"path": tgt, "method": "", "description": "Added to match a task", "_added_by": "plan-reconcile"})
+                        arch_changed = True
+                        added += 1
+
+        if arch_changed:
+            api_doc = dict(arch.doc_api or {})
+            api_doc["endpoints"] = endpoints
+            arch.doc_api = api_doc
+            db_doc = dict(arch.doc_database or {})
+            db_doc["tables"] = tables
+            arch.doc_database = db_doc
+
+        if aligned or added:
+            db.commit()
+        return {"status": "ok", "aligned": aligned, "added_to_arch": added,
+                "message": f"Reconciled {aligned + added} task(s): {aligned} renamed to match architecture, {added} added to architecture."}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("reconcile_plan failed")
         return {"error": str(exc)[:400]}
     finally:
         db.close()

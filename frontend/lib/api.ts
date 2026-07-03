@@ -1171,6 +1171,9 @@ export class ApiClient {
   async linkOrphanedTasks(projectId: string): Promise<{ task_id: string; status: string }> {
     return this.request(`/tasks/link-orphaned-tasks/${projectId}`, { method: "POST" });
   }
+  async reconcilePlan(projectId: string): Promise<{ task_id: string; status: string }> {
+    return this.request(`/tasks/reconcile-plan/${projectId}`, { method: "POST" });
+  }
   async getTaskCoverage(projectId: string): Promise<{
     total_frs: number;
     covered_frs: number;
