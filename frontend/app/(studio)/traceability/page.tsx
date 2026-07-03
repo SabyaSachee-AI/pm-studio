@@ -192,6 +192,11 @@ export default function TraceabilityPage() {
     } catch (e) { setError(e instanceof Error ? e.message : "Could not start reconcile"); }
   }
 
+  // True while any fix is running (drives the live auto-refresh below).
+  const anyFixRunning =
+    solveJob.isRunning || allSpecsJob.isRunning || archJob.isRunning ||
+    srsFillJob.isRunning || orphanJob.isRunning || reconcileJob.isRunning;
+
   async function handleGenerateAllSpecs() {
     if (!projectId || allSpecsJob.isRunning) return;
     setError("");
@@ -292,6 +297,14 @@ export default function TraceabilityPage() {
   }, []);
 
   useEffect(() => { if (projectId) loadData(projectId); }, [projectId, loadData]);
+
+  // While any fix runs, refresh the matrix every few seconds so rows turn green
+  // (and buttons become ✓ Done) as soon as the server-side work finishes.
+  useEffect(() => {
+    if (!projectId || !anyFixRunning) return;
+    const t = setInterval(() => loadData(projectId), 5000);
+    return () => clearInterval(t);
+  }, [projectId, anyFixRunning, loadData]);
 
   // If a bulk-spec job started here or on Kanban is still running, re-show its bar.
   useEffect(() => {

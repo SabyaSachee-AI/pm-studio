@@ -589,11 +589,19 @@ async def get_project_traceability(
     )
     arch = arch_result.scalar_one_or_none()
 
-    # Fetch all non-deleted tasks and their specs
+    # Fetch feature/requirement tasks + specs. System/infra tasks (project bible,
+    # code audit, UI-test, deploy) are excluded so the gap counts match what the
+    # auto-fixes actually cover (they skip system tasks) — otherwise rows like
+    # "Dev specs" / "Orphaned tasks" could never reach green.
+    from app.services.task.system_prompts import SYSTEM_TASK_ORDERS  # noqa: PLC0415
     tasks_result = await db.execute(
         select(Task)
         .options(selectinload(Task.spec))
-        .where(Task.project_id == project_id, Task.deleted_at.is_(None))
+        .where(
+            Task.project_id == project_id,
+            Task.deleted_at.is_(None),
+            Task.order_index.notin_(list(SYSTEM_TASK_ORDERS)),
+        )
         .order_by(Task.order_index.asc())
     )
     tasks = tasks_result.scalars().all()
