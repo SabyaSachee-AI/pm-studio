@@ -175,6 +175,22 @@ export default function TraceabilityPage() {
     }
   }
 
+  const [reqResolving, setReqResolving] = useState(false);
+  async function handleResolveRequirementGaps() {
+    if (!projectId || reqResolving) return;
+    setError("");
+    setReqResolving(true);
+    try {
+      const r = await api.resolveRequirementGaps(projectId);
+      setSolveResult(`✓ ${r.message}`);
+      loadData(projectId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not resolve requirement questions");
+    } finally {
+      setReqResolving(false);
+    }
+  }
+
   async function handleCompleteArchitecture() {
     if (!projectId || archJob.isRunning) return;
     setError("");
@@ -558,8 +574,13 @@ export default function TraceabilityPage() {
                     icon="ti-file-description"
                     label="Requirement questions"
                     status={reqGaps === 0 ? "no open questions" : `${reqGaps} open question${reqGaps > 1 ? "s" : ""}`}
-                    hint="Open points the AI found in your original document. Review them at the requirement stage."
-                    action={<a href={`/requirements?project=${projectId}`} className={LINK_BTN}><i className="ti ti-external-link" aria-hidden /> Open requirements</a>}
+                    hint="Open points the AI found in your document. Fix adds the AI's suggested answers to the SRS as assumptions (nothing existing changes) so the whole project honours them."
+                    action={
+                      <button onClick={() => void handleResolveRequirementGaps()} disabled={reqResolving} className={FIX_BTN}>
+                        <i className={`ti ${reqResolving ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
+                        {reqResolving ? "Resolving…" : "Auto-resolve into SRS"}
+                      </button>
+                    }
                   />
                 </div>
 

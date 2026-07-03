@@ -409,6 +409,81 @@ async def delete_task_endpoint(
     await delete_task(db, task)
 
 
+@router.post("/resolve-requirement-gaps/{project_id}")
+async def resolve_requirement_gaps(
+    project_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> dict:
+    """Auto-resolve open requirement questions — safely, append-only.
+
+    Adds the AI's suggested answers to the SRS as `assumptions` (nothing existing
+    is changed or removed) and marks the questions resolved, so downstream
+    generation honours those decisions and the gap disappears.
+    """
+    from datetime import datetime, timezone as _tz  # noqa: PLC0415
+
+    req = (await db.execute(
+        select(Requirement)
+        .where(Requirement.project_id == project_id, Requirement.deleted_at.is_(None))
+        .order_by(Requirement.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    ar = dict((req.analysis_result if req else None) or {})
+    unresolved = [g for g in (ar.get("gaps") or []) if not g.get("resolved")]
+    if not unresolved:
+        return {"applied": 0, "message": "No open requirement questions to resolve."}
+
+    new_assumptions: list[str] = []
+    for g in unresolved:
+        q = (g.get("question") or g.get("description") or "").strip()
+        a = (g.get("auto_answer") or "").strip()
+        text = f"{q} → {a}" if q and a else (a or q)
+        if text:
+            new_assumptions.append(text)
+
+    srs = (await db.execute(
+        select(SRS)
+        .where(SRS.project_id == project_id, SRS.deleted_at.is_(None))
+        .order_by(SRS.created_at.desc()).limit(1)
+    )).scalar_one_or_none()
+
+    applied_to: list[str] = []
+    if srs is not None and srs.content_json is not None and new_assumptions:
+        content = dict(srs.content_json)
+        existing = list(content.get("assumptions") or [])
+        seen = set(existing)
+        for t in new_assumptions:
+            if t not in seen:
+                existing.append(t)
+                seen.add(t)
+        content["assumptions"] = existing
+        log = list(content.get("_changelog") or [])
+        log.append({
+            "at": datetime.now(_tz.utc).isoformat(),
+            "change": f"Added {len(new_assumptions)} assumption(s) from resolved requirement questions",
+        })
+        content["_changelog"] = log
+        srs.content_json = content
+        applied_to.append("SRS")
+
+    for g in ar.get("gaps") or []:
+        g["resolved"] = True
+    if req is not None:
+        req.analysis_result = ar
+
+    await db.commit()
+    return {
+        "applied": len(new_assumptions),
+        "docs": applied_to,
+        "message": (
+            f"Added {len(new_assumptions)} assumption(s) to the SRS and resolved "
+            f"{len(unresolved)} question(s)."
+            if applied_to else
+            f"Resolved {len(unresolved)} question(s). (No SRS yet — assumptions will apply once an SRS exists.)"
+        ),
+    }
+
+
 @router.get("/traceability/{project_id}")
 async def get_project_traceability(
     project_id: UUID,
@@ -474,7 +549,11 @@ async def get_project_traceability(
             "id": str(requirement.id),
             "original_filename": requirement.original_filename,
             "status": requirement.status.value,
-            "gaps": (requirement.analysis_result or {}).get("gaps") or [],
+            # Hide gaps already resolved into the SRS (append-only auto-resolve).
+            "gaps": [
+                g for g in ((requirement.analysis_result or {}).get("gaps") or [])
+                if not g.get("resolved")
+            ],
         }
 
     prd_data = None
