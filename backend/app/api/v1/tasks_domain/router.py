@@ -3,6 +3,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -409,17 +410,24 @@ async def delete_task_endpoint(
     await delete_task(db, task)
 
 
+class ResolveRequirementGapsBody(BaseModel):
+    # Optional custom answers (one assumption line each). When omitted, the AI's
+    # suggested auto_answers are used instead.
+    answers: list[str] | None = None
+
+
 @router.post("/resolve-requirement-gaps/{project_id}")
 async def resolve_requirement_gaps(
     project_id: UUID,
+    body: ResolveRequirementGapsBody | None = None,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_screen_permission("tasks", "edit")),
 ) -> dict:
-    """Auto-resolve open requirement questions — safely, append-only.
+    """Resolve open requirement questions — safely, append-only.
 
-    Adds the AI's suggested answers to the SRS as `assumptions` (nothing existing
-    is changed or removed) and marks the questions resolved, so downstream
-    generation honours those decisions and the gap disappears.
+    Adds answers to the SRS as `assumptions` (nothing existing is changed) and
+    marks the questions resolved. Uses the user's custom `answers` when provided,
+    otherwise the AI's suggested auto_answers.
     """
     from datetime import datetime, timezone as _tz  # noqa: PLC0415
 
@@ -433,13 +441,17 @@ async def resolve_requirement_gaps(
     if not unresolved:
         return {"applied": 0, "message": "No open requirement questions to resolve."}
 
-    new_assumptions: list[str] = []
-    for g in unresolved:
-        q = (g.get("question") or g.get("description") or "").strip()
-        a = (g.get("auto_answer") or "").strip()
-        text = f"{q} → {a}" if q and a else (a or q)
-        if text:
-            new_assumptions.append(text)
+    custom = [a.strip() for a in (body.answers if body and body.answers else []) if a and a.strip()]
+    if custom:
+        new_assumptions = custom
+    else:
+        new_assumptions = []
+        for g in unresolved:
+            q = (g.get("question") or g.get("description") or "").strip()
+            a = (g.get("auto_answer") or "").strip()
+            text = f"{q} → {a}" if q and a else (a or q)
+            if text:
+                new_assumptions.append(text)
 
     srs = (await db.execute(
         select(SRS)

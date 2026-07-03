@@ -176,19 +176,42 @@ export default function TraceabilityPage() {
   }
 
   const [reqResolving, setReqResolving] = useState(false);
-  async function handleResolveRequirementGaps() {
+  const [showManualReq, setShowManualReq] = useState(false);
+  const [manualAnswers, setManualAnswers] = useState<Record<number, string>>({});
+
+  async function handleResolveRequirementGaps(answers?: string[]) {
     if (!projectId || reqResolving) return;
     setError("");
     setReqResolving(true);
     try {
-      const r = await api.resolveRequirementGaps(projectId);
+      const r = await api.resolveRequirementGaps(projectId, answers);
       setSolveResult(`✓ ${r.message}`);
+      setShowManualReq(false);
       loadData(projectId);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not resolve requirement questions");
     } finally {
       setReqResolving(false);
     }
+  }
+
+  function openManualReq() {
+    // Pre-fill each answer with the AI's suggestion so the user can edit or keep it.
+    const seed: Record<number, string> = {};
+    (data?.requirement?.gaps ?? []).forEach((g, i) => { seed[i] = g.auto_answer ?? ""; });
+    setManualAnswers(seed);
+    setShowManualReq(true);
+  }
+
+  function applyManualAnswers() {
+    const gaps = data?.requirement?.gaps ?? [];
+    const lines = gaps.map((g, i) => {
+      const ans = (manualAnswers[i] ?? g.auto_answer ?? "").trim();
+      if (!ans) return "";
+      const q = (g.question || g.description || "").trim();
+      return q ? `${q} → ${ans}` : ans;
+    }).filter(Boolean);
+    void handleResolveRequirementGaps(lines);
   }
 
   async function handleCompleteArchitecture() {
@@ -574,14 +597,49 @@ export default function TraceabilityPage() {
                     icon="ti-file-description"
                     label="Requirement questions"
                     status={reqGaps === 0 ? "no open questions" : `${reqGaps} open question${reqGaps > 1 ? "s" : ""}`}
-                    hint="Open points the AI found in your document. Fix adds the AI's suggested answers to the SRS as assumptions (nothing existing changes) so the whole project honours them."
+                    hint="Open points the AI found in your document. Pick either: let AI answer, or type your own — both get added to the SRS as assumptions (nothing existing changes)."
                     action={
-                      <button onClick={() => void handleResolveRequirementGaps()} disabled={reqResolving} className={FIX_BTN}>
-                        <i className={`ti ${reqResolving ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
-                        {reqResolving ? "Resolving…" : "Auto-resolve into SRS"}
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button onClick={() => void handleResolveRequirementGaps()} disabled={reqResolving} className={FIX_BTN}>
+                          <i className={`ti ${reqResolving ? "ti-loader-2 animate-spin" : "ti-wand"}`} aria-hidden />
+                          {reqResolving ? "Resolving…" : "Auto-resolve (AI)"}
+                        </button>
+                        <button onClick={openManualReq} disabled={reqResolving} className={LINK_BTN}>
+                          <i className="ti ti-edit" aria-hidden /> Answer manually
+                        </button>
+                      </div>
                     }
                   />
+
+                  {/* Manual answer editor — pre-filled with the AI's suggestions */}
+                  {showManualReq && (data.requirement?.gaps.length ?? 0) > 0 && (
+                    <div className="rounded-lg border border-indigo-800/40 bg-gray-950/60 p-3 space-y-2">
+                      <p className="text-xs text-gray-400">
+                        Edit any answer (pre-filled with the AI's suggestion), then apply. Each becomes an SRS assumption. Leave one blank to skip it.
+                      </p>
+                      {data.requirement!.gaps.map((g, i) => (
+                        <div key={i} className="space-y-1">
+                          <p className="text-[11px] text-gray-300">
+                            <span className="rounded bg-gray-800 px-1 text-[9px] uppercase text-gray-400">{g.category}</span>{" "}
+                            {g.question || g.description}
+                          </p>
+                          <input
+                            value={manualAnswers[i] ?? g.auto_answer ?? ""}
+                            onChange={(e) => setManualAnswers((p) => ({ ...p, [i]: e.target.value }))}
+                            placeholder="Your answer…"
+                            className="w-full rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200"
+                          />
+                        </div>
+                      ))}
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button onClick={applyManualAnswers} disabled={reqResolving} className={FIX_BTN}>
+                          <i className={`ti ${reqResolving ? "ti-loader-2 animate-spin" : "ti-check"}`} aria-hidden />
+                          {reqResolving ? "Applying…" : "Apply my answers to SRS"}
+                        </button>
+                        <button onClick={() => setShowManualReq(false)} disabled={reqResolving} className={LINK_BTN}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* live progress for the fixes started here */}

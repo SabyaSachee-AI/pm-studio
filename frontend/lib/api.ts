@@ -1159,8 +1159,11 @@ export class ApiClient {
   async getTraceability(projectId: string): Promise<any> {
     return this.request(`/tasks/traceability/${projectId}`);
   }
-  async resolveRequirementGaps(projectId: string): Promise<{ applied: number; docs?: string[]; message: string }> {
-    return this.request(`/tasks/resolve-requirement-gaps/${projectId}`, { method: "POST" });
+  async resolveRequirementGaps(projectId: string, answers?: string[]): Promise<{ applied: number; docs?: string[]; message: string }> {
+    return this.request(`/tasks/resolve-requirement-gaps/${projectId}`, {
+      method: "POST",
+      body: JSON.stringify({ answers: answers ?? null }),
+    });
   }
   async getTaskCoverage(projectId: string): Promise<{
     total_frs: number;
