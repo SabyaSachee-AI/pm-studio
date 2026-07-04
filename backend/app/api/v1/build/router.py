@@ -398,6 +398,36 @@ async def sync_from_github(
     return result
 
 
+@router.post("/{build_id}/cancel", response_model=BuildResponse)
+async def cancel_build(
+    build_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> BuildResponse:
+    """Stop the build's currently running/queued task on the server (frees the
+    worker slot + saves API quota) and settle the build into a safe, resumable state."""
+    build = await _load_build(build_id, db)
+    if build.generation_task_id:
+        try:
+            celery_app.control.revoke(build.generation_task_id, terminate=True, signal="SIGTERM")
+        except Exception:  # noqa: BLE001
+            pass
+    # Unlock the UI by leaving an active status; keep generated work resumable.
+    if build.status == BuildStatus.scaffolding:
+        build.status = BuildStatus.draft
+    elif build.status == BuildStatus.generating:
+        build.status = BuildStatus.scaffolded
+        build.can_resume = True
+    build.generation_task_id = None
+    build.last_error = "Cancelled by user"
+    report = dict(build.quality_report or {})
+    report.pop("auto_ci", None)
+    build.quality_report = report
+    await db.commit()
+    await db.refresh(build)
+    return _to_response(build, await _file_count(build.id, db))
+
+
 @router.post("/{build_id}/mark-ready", response_model=BuildResponse)
 async def mark_build_ready(
     build_id: UUID,

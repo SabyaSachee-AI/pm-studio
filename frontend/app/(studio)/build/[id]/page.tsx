@@ -343,6 +343,16 @@ export default function BuildWorkspacePage() {
     }
   }
 
+  async function handleCancel() {
+    aiJob.cancel();  // stop the UI tracker immediately
+    try {
+      await api.cancelBuild(id);  // actually stop the task on the server
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not cancel");
+    }
+  }
+
   async function handleMarkReady() {
     if (!window.confirm(
       "Mark this build as ready?\n\nUse this when CI passed (or you verified the app locally) but PM Studio can't read the CI status — e.g. the GitHub token is missing Actions: Read.",
@@ -841,7 +851,7 @@ export default function BuildWorkspacePage() {
             processingMessage={liveMessage}
             currentModel={barProps.currentModel || progressModel || selectedModel}
             nextStep={nextStep}
-            onCancel={aiJob.cancel}
+            onCancel={() => void handleCancel()}
           />
         );
       })() : null}

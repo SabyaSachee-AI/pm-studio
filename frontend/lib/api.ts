@@ -1116,6 +1116,9 @@ export class ApiClient {
   async markBuildReady(id: string): Promise<BuildSummary> {
     return this.request(`/builds/${id}/mark-ready`, { method: "POST" });
   }
+  async cancelBuild(id: string): Promise<BuildSummary> {
+    return this.request(`/builds/${id}/cancel`, { method: "POST" });
+  }
   async syncBuildFromGithub(id: string): Promise<{
     status: string; added: number; updated: number; removed: number; total: number;
   }> {
