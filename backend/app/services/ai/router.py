@@ -49,6 +49,10 @@ _DEFAULT_MAX_RETRIES = 3
 
 _COOLDOWN_DAILY_QUOTA_SEC = 3600
 _COOLDOWN_RATE_LIMIT_SEC = 120
+# Credit depletion (HTTP 402 / "insufficient credits") is not transient — the
+# provider stays broke until the user tops up. Skip it for a long window so the
+# fallback chain doesn't waste every run retrying a depleted provider.
+_COOLDOWN_CREDIT_DEPLETED_SEC = 6 * 3600
 _SAME_MODEL_RATE_LIMIT_RETRIES = 1
 _RATE_LIMIT_BACKOFF_BASE_SEC = 1.0
 _RATE_LIMIT_BACKOFF_MAX_SEC = 30.0
@@ -135,6 +139,22 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
         return True
     msg = str(exc).lower()
     return "rate limit" in msg or "429" in msg or "quota" in msg or "503" in msg
+
+
+def _is_credit_depleted_error(exc: BaseException) -> bool:
+    """HTTP 402 or 'insufficient credits' — provider is out of money, not rate limited."""
+    if getattr(exc, "status_code", None) == 402:
+        return True
+    msg = str(exc).lower()
+    return (
+        "402" in msg
+        or "depleted" in msg
+        or "insufficient credit" in msg
+        or "insufficient_quota" in msg
+        or "payment required" in msg
+        or "out of credit" in msg
+        or ("billing" in msg and "credit" in msg)
+    )
 
 
 def _is_daily_quota_error(exc: BaseException) -> bool:
@@ -453,6 +473,31 @@ class AiRouter:
                     logger.warning(last_error, extra={"tier": tier, "attempt": attempt_num})
                     break
                 except Exception as exc:
+                    if _is_credit_depleted_error(exc):
+                        last_error = f"Credits depleted: {provider}/{model}"
+                        await _set_cooling(
+                            provider,
+                            model,
+                            _COOLDOWN_CREDIT_DEPLETED_SEC,
+                            "provider",
+                        )
+                        logger.warning(
+                            "Credits depleted on %s/%s — skipping provider for %dh",
+                            provider,
+                            model,
+                            _COOLDOWN_CREDIT_DEPLETED_SEC // 3600,
+                            extra={"tier": tier},
+                        )
+                        publish_job_progress(
+                            phase="rate_limited",
+                            message=(
+                                f"{model_display_name(model)} out of credits — "
+                                "switching provider…"
+                            ),
+                            current_model=model_display_name(model),
+                            attempt=attempt_num,
+                        )
+                        break
                     is_rate_limit = _is_rate_limit_error(exc)
                     last_error = (
                         f"Rate limit: {provider}/{model}"
