@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_current_user, require_screen_permission
+from app.core.celery_app import celery_app
 from app.core.database import get_db
 from app.models.architecture import Architecture, ArchitectureStatus
 from app.models.build import Build, BuildStatus, GeneratedFile
@@ -42,6 +43,16 @@ from app.workers.build_tasks import (
 )
 
 router = APIRouter(prefix="/builds", tags=["Build"])
+
+
+def _revoke_prev_task(build: Build) -> None:
+    """Drop this build's previous queued task (if any) so stale/duplicate tasks
+    never pile up. Only affects tasks not yet started — running work is untouched."""
+    if build.generation_task_id:
+        try:
+            celery_app.control.revoke(build.generation_task_id)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def _load_build(build_id: UUID, db: AsyncSession) -> Build:
@@ -210,6 +221,7 @@ async def scaffold_build(
     build = await _load_build(build_id, db)
     task = scaffold_build_task.delay(str(build.id), model_provider=model_provider, model_id=model_id)
     build.status = BuildStatus.scaffolding
+    _revoke_prev_task(build)
     build.generation_task_id = task.id
     build.last_error = None
     build.generation_progress = {
@@ -234,6 +246,7 @@ async def generate_build(
         str(build.id), resume=resume, model_provider=model_provider, model_id=model_id
     )
     build.status = BuildStatus.generating
+    _revoke_prev_task(build)
     build.generation_task_id = task.id
     build.last_error = None
     gp = dict(build.generation_progress or {}) if resume else {}
@@ -256,6 +269,7 @@ async def generate_task_code(
     task = generate_task_code_task.delay(
         str(build.id), str(task_id), model_provider=model_provider, model_id=model_id
     )
+    _revoke_prev_task(build)
     build.generation_task_id = task.id
     await db.commit()
     return {"build_id": str(build.id), "task_id": task.id, "status": "generating"}
@@ -327,6 +341,7 @@ async def push_build(
     if await _file_count(build.id, db) == 0:
         raise HTTPException(status_code=400, detail="No files to push — generate code first")
     task = push_build_to_github_task.delay(str(build.id))
+    _revoke_prev_task(build)
     build.generation_task_id = task.id
     await db.commit()
     return {"build_id": str(build.id), "task_id": task.id, "status": "pushing"}
@@ -425,6 +440,7 @@ async def polish_build_endpoint(
     if await _file_count(build.id, db) == 0:
         raise HTTPException(status_code=400, detail="Generate code before polishing")
     task = polish_build_task.delay(str(build.id), scope, model_provider, model_id)
+    _revoke_prev_task(build)
     build.generation_task_id = task.id
     await db.commit()
     return {"build_id": str(build.id), "task_id": task.id, "status": "polishing"}
@@ -443,6 +459,7 @@ async def generate_tests(
     if await _file_count(build.id, db) == 0:
         raise HTTPException(status_code=400, detail="Generate code before tests")
     task = generate_tests_task.delay(str(build.id), model_provider=model_provider, model_id=model_id)
+    _revoke_prev_task(build)
     build.generation_task_id = task.id
     await db.commit()
     return {"build_id": str(build.id), "task_id": task.id, "status": "generating_tests"}
@@ -461,6 +478,7 @@ async def repair_build(
     if not build.github_full_name:
         raise HTTPException(status_code=400, detail="Build not pushed to GitHub yet")
     task = repair_build_task.delay(str(build.id), model_provider=model_provider, model_id=model_id)
+    _revoke_prev_task(build)
     build.generation_task_id = task.id
     await db.commit()
     return {"build_id": str(build.id), "task_id": task.id, "status": "repairing"}
@@ -546,6 +564,7 @@ async def deploy_build_endpoint(
     if not build.github_full_name:
         raise HTTPException(status_code=400, detail="Push the build to GitHub first")
     task = deploy_build_task.delay(str(build.id), port=port)
+    _revoke_prev_task(build)
     build.generation_task_id = task.id
     await db.commit()
     return {"build_id": str(build.id), "task_id": task.id, "status": "deploying"}

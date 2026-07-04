@@ -47,6 +47,14 @@ celery_app.conf.update(
     # The default worker still serves everything else (the "celery" queue).
     task_routes={"build.*": {"queue": "build"}},
     task_default_queue="celery",
+    # Each worker process takes ONE task at a time (fair scheduling across projects —
+    # no process hoards the queue while others sit idle).
+    worker_prefetch_multiplier=1,
+    # A stuck task (e.g. endless provider rate-limits) can't hog a worker forever.
+    # Soft limit raises a catchable error first (long codegen auto-resumes); the
+    # hard limit is a last-resort backstop. Normal tasks finish well under these.
+    task_soft_time_limit=1800,   # 30 min
+    task_time_limit=2400,        # 40 min
 )
 
 celery_app.autodiscover_tasks(["app.workers"])
