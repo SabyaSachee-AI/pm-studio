@@ -104,6 +104,27 @@ export interface AiModelCatalog {
   models: AiModelOption[];
 }
 
+export type AiChainModelStatus = "ready" | "cooling" | "no_key" | "unsupported";
+
+export interface AiChainModel {
+  index: number;
+  provider: string;
+  model: string;
+  has_key: boolean;
+  cooling: boolean;
+  status: AiChainModelStatus;
+}
+
+export interface AiChainStatus {
+  task_type: string;
+  task_types: string[];
+  organization: string | null;
+  total: number;
+  usable_now: number;
+  models: AiChainModel[];
+  error?: string;
+}
+
 export interface Client {
   id: string;
   name: string;
@@ -612,6 +633,11 @@ export class ApiClient {
   // AI model catalog + per-action override
   async listAiModels(): Promise<AiModelCatalog> {
     return this.request("/ai/models");
+  }
+
+  /** Live status of every model in a task's free-tier fallback chain. */
+  async getAiChainStatus(taskType = "code_generate"): Promise<AiChainStatus> {
+    return this.request(`/ai/chain-status?task_type=${encodeURIComponent(taskType)}`);
   }
 
   /** Build ?model_provider=&model_id= query suffix for a one-shot model choice. */

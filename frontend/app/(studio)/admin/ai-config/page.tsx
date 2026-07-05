@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AiUsageGuidePanel } from "@/components/features/admin/AiUsageGuidePanel";
+import { AiChainStatusPanel } from "@/components/features/admin/AiChainStatusPanel";
 import { Button } from "@/components/ui/button";
 import { QualityStars } from "@/components/ui/ScreenModelSelector";
 import {
@@ -425,7 +426,7 @@ function ModelCatalogSection({
   );
 }
 
-type ConfigTab = "guide" | "settings";
+type ConfigTab = "guide" | "settings" | "status";
 
 function GithubSection() {
   const [cfg, setCfg] = useState<{ configured: boolean; masked_token: string | null; owner: string | null; source: string } | null>(null);
@@ -739,6 +740,7 @@ export default function AiConfigPage() {
               [
                 ["guide", "Usage guide"],
                 ["settings", "Settings"],
+                ["status", "Live status"],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -776,6 +778,8 @@ export default function AiConfigPage() {
       {activeTab === "guide" ? (
         <AiUsageGuidePanel config={config} activeTier={tier} />
       ) : null}
+
+      {activeTab === "status" ? <AiChainStatusPanel /> : null}
 
       {activeTab === "settings" ? (
         <>
