@@ -93,9 +93,13 @@ _AUTO_RESUME_COOLDOWN = 150   # seconds between auto-resumes (lets free quotas r
 def _schedule_auto_resume(self, build_id: str, model_provider, model_id):
     """Re-enqueue this build (resume=True) so generation continues automatically
     from the last completed task — no manual click. Bounded by _AUTO_RESUME_MAX."""
+    # build_id must go through `args` only. The task is originally invoked with
+    # build_id as a POSITIONAL arg, and self.retry() re-uses request.args; also
+    # passing build_id in kwargs makes Celery raise
+    # "got multiple values for argument 'build_id'", which crashed every resume.
     raise self.retry(
+        args=(build_id,),
         kwargs={
-            "build_id": build_id,
             "resume": True,
             "model_provider": model_provider,
             "model_id": model_id,
