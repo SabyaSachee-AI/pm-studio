@@ -118,12 +118,64 @@ def _spec_for_task(task: Task) -> dict[str, Any]:
     }
 
 
-def _manifest(files: list[GeneratedFile], limit: int = 60) -> str:
-    """Paths + signatures of already-generated files, for cross-file context."""
+def _manifest(
+    files: list[GeneratedFile],
+    limit: int = 60,
+    char_budget: int | None = None,
+) -> str:
+    """Paths + signatures of already-generated files, for cross-file context.
+
+    When ``char_budget`` is set the block is kept small so low-context models can
+    still take a chunk: files are listed with signatures until the budget runs
+    out, then the rest are listed as bare paths (imports still resolve) and
+    finally summarised as a count. Callers that want the old unbounded behaviour
+    simply omit ``char_budget``.
+    """
     rows: list[str] = []
-    for f in files[:limit]:
-        rows.append(f"- {f.path}" + (f"\n    {f.signature}" if f.signature else ""))
+    if char_budget is None:
+        for f in files[:limit]:
+            rows.append(f"- {f.path}" + (f"\n    {f.signature}" if f.signature else ""))
+        return "\n".join(rows)
+
+    capped = files[:limit]
+    used = 0
+    idx = 0
+    # Phase 1: full path + signature until the budget is spent.
+    for idx, f in enumerate(capped):
+        row = f"- {f.path}" + (f"\n    {f.signature}" if f.signature else "")
+        if used + len(row) + 1 > char_budget:
+            break
+        rows.append(row)
+        used += len(row) + 1
+    else:
+        return "\n".join(rows)
+    # Phase 2: remaining files as bare paths (cheap, keeps imports resolvable).
+    bare_budget = char_budget + 3000
+    for j in range(idx, len(capped)):
+        line = f"- {capped[j].path}"
+        if used + len(line) + 1 > bare_budget:
+            rows.append(f"- …(+{len(capped) - j} more files — ask if you need one)")
+            break
+        rows.append(line)
+        used += len(line) + 1
     return "\n".join(rows)
+
+
+def _relevance_order(files: list[GeneratedFile], task: Task) -> list[GeneratedFile]:
+    """Order prior files by likely relevance to ``task`` so the most useful ones
+    survive the manifest char budget: same module/dir first, then foundational
+    dependency layers, then the rest (stable order preserved within each group)."""
+    module = (task.module_name or "").strip().lower()
+
+    def score(f: GeneratedFile) -> int:
+        low = f.path.lower()
+        if module and module in low:
+            return 0
+        if any(h in low for h in _DEP_PATH_HINTS):
+            return 1
+        return 2
+
+    return sorted(files, key=score)
 
 
 # Foundational layers a task usually imports from — included as FULL content.
@@ -133,6 +185,8 @@ _DEP_PATH_HINTS = (
 )
 _RELATED_FULL_LIMIT = 8       # how many dependency files to inline in full
 _RELATED_FILE_CHARS = 2200    # per-file content cap (keeps small-context models happy)
+_MANIFEST_CHAR_BUDGET = 6000  # cap on the "other existing files" block so the chunk
+                              # stays small enough for low-context models to take it
 
 
 def _spec_paths(spec: dict[str, Any]) -> set[str]:
@@ -762,9 +816,11 @@ async def _generate_one_task(
     # Dependency-aware context: FULL content of the files this task most likely
     # imports/extends; signatures only for everything else (token-bounded).
     related, related_paths = _related_files(spec, task, prior_files)
-    rest = [f for f in prior_files if f.path not in related_paths]
+    rest = _relevance_order(
+        [f for f in prior_files if f.path not in related_paths], task
+    )
     related_block = _related_block(related)
-    manifest = _manifest(rest, limit=120)
+    manifest = _manifest(rest, limit=120, char_budget=_MANIFEST_CHAR_BUDGET)
 
     prompt = (
         f"Project: {project_info.get('name', 'Project')}\n\n"
