@@ -39,6 +39,7 @@ from app.workers.build_tasks import (
     polish_build_task,
     push_build_to_github_task,
     repair_build_task,
+    run_ci_task,
     scaffold_build_task,
 )
 
@@ -336,7 +337,11 @@ async def push_build(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_screen_permission("tasks", "edit")),
 ) -> dict[str, str]:
-    """Push the generated codebase to GitHub in one commit (triggers CI)."""
+    """Push the generated codebase to GitHub in one commit.
+
+    CI is NOT started here — run it separately via POST /{build_id}/run-ci so you
+    can clone, test and re-push locally first.
+    """
     build = await _load_build(build_id, db)
     if await _file_count(build.id, db) == 0:
         raise HTTPException(status_code=400, detail="No files to push — generate code first")
@@ -345,6 +350,23 @@ async def push_build(
     build.generation_task_id = task.id
     await db.commit()
     return {"build_id": str(build.id), "task_id": task.id, "status": "pushing"}
+
+
+@router.post("/{build_id}/run-ci", status_code=status.HTTP_202_ACCEPTED)
+async def run_ci(
+    build_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_screen_permission("tasks", "edit")),
+) -> dict[str, str]:
+    """Manually start CI/QA on GitHub (workflow_dispatch), then watch it."""
+    build = await _load_build(build_id, db)
+    if not build.github_full_name:
+        raise HTTPException(status_code=400, detail="Not pushed to GitHub yet — push first")
+    task = run_ci_task.delay(str(build.id))
+    _revoke_prev_task(build)
+    build.generation_task_id = task.id
+    await db.commit()
+    return {"build_id": str(build.id), "task_id": task.id, "status": "ci_starting"}
 
 
 @router.get("/{build_id}/qa")

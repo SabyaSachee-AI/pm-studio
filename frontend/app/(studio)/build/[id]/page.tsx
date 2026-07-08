@@ -308,6 +308,18 @@ export default function BuildWorkspacePage() {
     }
   }
 
+  async function handleRunCi() {
+    setError("");
+    try {
+      const r = await api.runCi(id);
+      attached.current.add(r.task_id);
+      aiJob.startJob(r.task_id, "Starting CI/QA");
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start CI — push to GitHub first.");
+    }
+  }
+
   async function handleRepair() {
     setError("");
     try {
@@ -581,24 +593,31 @@ export default function BuildWorkspacePage() {
             </Button>
           ) : null}
 
-          {/* 5 — Push to GitHub (triggers CI/QA automatically) */}
+          {/* 5 — Push to GitHub (code only; CI is a separate manual step) */}
           {build.file_count > 0 && !actionsLocked ? (
             <Button size="sm" variant="outline" onClick={() => void handlePush()}>
               <StepNum n={5} /><i className="ti ti-brand-github mr-1.5" aria-hidden /> Push to GitHub
             </Button>
           ) : null}
 
-          {/* 6 — Local UI test (run locally + push/sync instructions inside) */}
-          {build.file_count > 0 ? (
-            <Button size="sm" variant="outline" onClick={() => void openUiTest()}>
-              <StepNum n={6} /><i className="ti ti-device-desktop-check mr-1.5" aria-hidden /> Local UI test
+          {/* 6 — Run CI/QA (manual — dispatch CI after local testing) */}
+          {build.github_full_name && !actionsLocked ? (
+            <Button size="sm" variant="outline" onClick={() => void handleRunCi()}>
+              <StepNum n={6} /><i className="ti ti-test-pipe mr-1.5" aria-hidden /> Run CI / QA
             </Button>
           ) : null}
 
-          {/* 7 — Deploy to VPS */}
+          {/* 7 — Local UI test (run locally + push/sync instructions inside) */}
+          {build.file_count > 0 ? (
+            <Button size="sm" variant="outline" onClick={() => void openUiTest()}>
+              <StepNum n={7} /><i className="ti ti-device-desktop-check mr-1.5" aria-hidden /> Local UI test
+            </Button>
+          ) : null}
+
+          {/* 8 — Deploy to VPS */}
           {build.github_full_name && !actionsLocked ? (
             <Button size="sm" variant="outline" onClick={() => void handleDeploy()}>
-              <StepNum n={7} /><i className="ti ti-rocket mr-1.5" aria-hidden /> Deploy to VPS
+              <StepNum n={8} /><i className="ti ti-rocket mr-1.5" aria-hidden /> Deploy to VPS
             </Button>
           ) : null}
 

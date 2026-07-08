@@ -211,13 +211,71 @@ def push_build_to_github_task(self, build_id: str) -> dict[str, Any]:
         build.quality_report = report
         db.commit()
         result = _run_async(push_build(UUID(build_id), db, _project_info(db, build)["name"]))
-        # Kick off the autonomous CI loop: watch CI → on failure AI-repair + re-push,
-        # repeat until green or repair attempts run out. No manual clicks.
-        if isinstance(result, dict) and result.get("status") == "pushed":
-            _schedule_auto_ci(build_id, polls=0, countdown=25)
+        # Push only — CI is now a separate, manual step (workflow_dispatch). This
+        # gives the user a window to clone/test/commit locally before running CI.
+        # The "Run CI/QA" button (run_ci_task) dispatches CI and starts the watcher.
         return result
     except Exception as exc:  # noqa: BLE001
         logger.exception("GitHub push failed")
+        if build is not None:
+            build.last_error = str(exc)[:500]
+            db.commit()
+        return {"error": str(exc)[:500]}
+    finally:
+        db.close()
+
+
+def _dispatch_ci_run(full_name: str | None, branch: str | None) -> bool:
+    """Manually trigger the CI workflow (workflow_dispatch). Returns True if queued.
+
+    CI no longer runs on push — every push (initial or an auto-repair re-push)
+    that needs CI must call this so a run actually starts on GitHub.
+    """
+    if not full_name:
+        return False
+    from app.services.build.github import trigger_workflow  # noqa: PLC0415
+    try:
+        return _run_async(trigger_workflow(full_name, "ci.yml", branch or "main"))
+    except Exception:  # noqa: BLE001
+        logger.exception("CI dispatch failed for %s", full_name)
+        return False
+
+
+@celery_app.task(bind=True, name="build.run_ci")
+def run_ci_task(self, build_id: str) -> dict[str, Any]:
+    """Stage 4 — manually start CI/QA: dispatch the CI workflow, then watch it.
+
+    Separate from push so the user can clone, test and re-push locally first,
+    then start CI when they are ready. On failure the watcher AI-repairs and
+    re-pushes (re-dispatching CI) until green or the repair budget runs out.
+    """
+    db = SyncSessionLocal()
+    build: Build | None = None
+    try:
+        build = db.query(Build).filter(
+            Build.id == UUID(build_id), Build.deleted_at.is_(None)
+        ).first()
+        if not build:
+            return {"error": "Build not found"}
+        if not build.github_full_name:
+            return {"error": "Not pushed to GitHub yet — push first"}
+        build.generation_task_id = self.request.id
+        # A user-initiated CI run is a fresh start: reset the auto-repair budget.
+        report = dict(build.quality_report or {})
+        report["repair_attempts"] = 0
+        report.pop("auto_ci", None)
+        build.quality_report = report
+        db.commit()
+        dispatched = _dispatch_ci_run(build.github_full_name, build.default_branch)
+        if not dispatched:
+            build.last_error = "Could not start CI on GitHub (workflow_dispatch failed)."
+            db.commit()
+            return {"error": "CI dispatch failed"}
+        # Give GitHub a moment to register the run, then start the watcher loop.
+        _schedule_auto_ci(build_id, polls=0, countdown=25)
+        return {"status": "ci_started", "repo": build.github_full_name}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Run CI failed")
         if build is not None:
             build.last_error = str(exc)[:500]
             db.commit()
@@ -335,8 +393,10 @@ def repair_build_task(
         result = _run_async(
             repair_build_from_ci(UUID(build_id), db, _project_info(db, build)["name"])
         )
-        # Resume the autonomous watcher after a manual fix re-push.
+        # Resume the autonomous watcher after a manual fix re-push. CI no longer
+        # runs on push, so dispatch it explicitly for the new commit.
         if isinstance(result, dict) and result.get("status") == "repaired":
+            _dispatch_ci_run(build.github_full_name, build.default_branch)
             _schedule_auto_ci(build_id, polls=0, countdown=30)
         return result
     except Exception as exc:  # noqa: BLE001
@@ -656,6 +716,8 @@ def auto_ci_watch_task(self, build_id: str, polls: int = 0) -> dict[str, Any]:
             release_auto_ci(build_id)
             return {"stop": result["error"]}
 
+        # CI no longer auto-runs on push — dispatch a fresh run for the fix commit.
+        _dispatch_ci_run(build.github_full_name, build.default_branch)
         _set_auto_ci(
             db, build, "repushed",
             f"Fixed {result.get('files_fixed', 0)} file(s) & re-pushed — watching new CI run…",

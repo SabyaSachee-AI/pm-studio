@@ -1125,6 +1125,11 @@ export class ApiClient {
     return this.request<{ build_id: string; task_id: string; status: string }>(
       `/builds/${id}/push`, { method: "POST" });
   }
+  /** Manually start CI/QA on GitHub (separate from push). */
+  async runCi(id: string) {
+    return this.request<{ build_id: string; task_id: string; status: string }>(
+      `/builds/${id}/run-ci`, { method: "POST" });
+  }
   async getBuildQa(id: string): Promise<{
     status?: string;
     conclusion?: string | null;

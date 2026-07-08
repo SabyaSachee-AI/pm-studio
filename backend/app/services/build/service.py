@@ -423,9 +423,6 @@ SCAFFOLD_SYSTEM = (
 # generated layout; build/test failures DO fail CI (so "green" means verified).
 _CI_WORKFLOW = """name: CI
 on:
-  push:
-    branches: [main, master]
-  pull_request:
   workflow_dispatch:
 jobs:
   backend:
