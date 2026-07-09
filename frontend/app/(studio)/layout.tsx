@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { CommandPalette } from "@/components/layout/CommandPalette";
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { api, type UserResponse } from "@/lib/api";
@@ -37,6 +38,7 @@ export default function StudioLayout({
 
   return (
     <div className="flex min-h-screen bg-gray-950 text-white">
+      <CommandPalette />
       <Sidebar />
       <div className="flex flex-1 flex-col">
         <Header user={user} />

@@ -148,7 +148,27 @@ export default function BuildWorkspacePage() {
   const [aiInstruction, setAiInstruction] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [buildModel, setBuildModel] = useState<ModelChoice | null>(null);
+  // Smart default: remember the last model pick per build so re-opening the
+  // screen (or a browser refresh) keeps working with the same model.
+  const modelStorageKey = `pms-build-model:${id}`;
+  const [buildModel, setBuildModelState] = useState<ModelChoice | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem(`pms-build-model:${id}`);
+      return raw ? (JSON.parse(raw) as ModelChoice) : null;
+    } catch {
+      return null;
+    }
+  });
+  const setBuildModel = useCallback((m: ModelChoice | null) => {
+    setBuildModelState(m);
+    try {
+      if (m) localStorage.setItem(modelStorageKey, JSON.stringify(m));
+      else localStorage.removeItem(modelStorageKey);
+    } catch {
+      /* storage unavailable — selection still works for this session */
+    }
+  }, [modelStorageKey]);
   const [qa, setQa] = useState<{ status?: string; conclusion?: string | null; run_url?: string; message?: string; error?: string } | null>(null);
   const [showUiTest, setShowUiTest] = useState(false);
   const [uiChecklist, setUiChecklist] = useState<{ clone_cmd: string; run_cmd: string; items: { key: string; task_title: string; criterion: string }[] } | null>(null);

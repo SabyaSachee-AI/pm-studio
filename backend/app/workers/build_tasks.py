@@ -40,6 +40,36 @@ def _project_info(db, build: Build) -> dict[str, Any]:
     }
 
 
+def _notify_build_event(db, build: Build, title: str, message: str) -> None:
+    """In-app notification for the build's creator (bell icon) on key events.
+
+    Sync (workers). Best-effort — a notification failure must never break a build.
+    """
+    try:
+        from app.models.notification import Notification  # noqa: PLC0415
+        from app.models.user import User, UserRole  # noqa: PLC0415
+
+        user_ids = []
+        if build.created_by_id:
+            user_ids = [build.created_by_id]
+        else:
+            owners = db.query(User.id).filter(
+                User.deleted_at.is_(None), User.role == UserRole.studio_owner
+            ).all()
+            user_ids = [u.id for u in owners]
+        for uid in user_ids:
+            db.add(Notification(
+                user_id=uid,
+                title=title,
+                message=message[:900],
+                link=f"/build/{build.id}",
+                is_read=False,
+            ))
+        db.commit()
+    except Exception:  # noqa: BLE001
+        logger.debug("Build notification failed (non-fatal)", exc_info=True)
+
+
 def _remember_model(db, build: Build, provider: str | None, model: str | None) -> None:
     """Persist the user's model pick so the autonomous CI-repair loop can reuse it
     (otherwise auto-repair would always fall back to the free chain)."""
@@ -142,6 +172,12 @@ def generate_build_task(
         db.commit()
         with build_job_scope(build_id):
             result = _run_async(generate_build_code(UUID(build_id), db, resume=resume))
+        if isinstance(result, dict) and result.get("status") == "completed":
+            _notify_build_event(
+                db, build, "Code generation finished",
+                f"All {result.get('tasks', '?')} tasks generated "
+                f"({result.get('file_count', '?')} files). Next: push to GitHub.",
+            )
         # Result-level failure (in-run retries exhausted) → auto-resume.
         if isinstance(result, dict) and result.get("status") == "failed":
             needs_resume = True
@@ -182,6 +218,11 @@ def generate_build_task(
                     b.status = BuildStatus.failed
                     b.can_resume = True
                     db2.commit()
+                    _notify_build_event(
+                        db2, b, "Code generation needs attention",
+                        "Generation paused after repeated retries (AI quotas). "
+                        "Open the build and press Resume, or switch to a premium model.",
+                    )
             finally:
                 db2.close()
             return result or {"error": "exhausted auto-resume"}
@@ -693,6 +734,10 @@ def auto_ci_watch_task(self, build_id: str, polls: int = 0) -> dict[str, Any]:
         if conclusion == "success":
             _set_auto_ci(db, build, "passed", "CI passed — build is ready.")
             release_auto_ci(build_id)
+            _notify_build_event(
+                db, build, "CI passed ✅",
+                "All quality gates are green. Next: Local UI test or Deploy to VPS.",
+            )
             return {"done": "passed"}
 
         # CI failed → AI-repair if attempts remain.
@@ -702,6 +747,11 @@ def auto_ci_watch_task(self, build_id: str, polls: int = 0) -> dict[str, Any]:
             _set_auto_ci(db, build, "stopped",
                          f"Auto-repair tried {attempts}× and CI still fails — manual review needed.")
             release_auto_ci(build_id)
+            _notify_build_event(
+                db, build, "CI still failing after auto-repair",
+                f"Auto-repair tried {attempts}x and CI is still red. "
+                "Open the build to review the failure and fix manually or with AI.",
+            )
             return {"stop": "limit"}
 
         from app.models.project import Project  # noqa: PLC0415
