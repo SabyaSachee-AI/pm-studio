@@ -17,6 +17,26 @@ export interface PermissionMatrix {
   permissions: PermissionCell[];
 }
 
+export interface ActiveJob {
+  build_id: string;
+  project_id: string;
+  project_name: string;
+  version: number;
+  status: string;
+  phase: string | null;
+  message: string | null;
+  current_task: string | null;
+  done_tasks: number;
+  total_tasks: number | null;
+  heartbeat_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ActiveJobsResponse {
+  jobs: ActiveJob[];
+  count: number;
+}
+
 export interface DashboardStats {
   generated_at: string;
   projects: { total: number; by_status: Record<string, number> };
@@ -606,6 +626,11 @@ export class ApiClient {
 
   async getDashboardStats(): Promise<DashboardStats> {
     return this.request<DashboardStats>("/dashboard/stats");
+  }
+
+  /** All AI jobs currently running across projects (build pipelines). */
+  async getActiveJobs(): Promise<ActiveJobsResponse> {
+    return this.request<ActiveJobsResponse>("/dashboard/active-jobs");
   }
 
   async me(): Promise<UserResponse> {

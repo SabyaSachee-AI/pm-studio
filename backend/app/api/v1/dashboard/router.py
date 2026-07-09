@@ -26,6 +26,58 @@ from app.services.ai.usage_tracker import PROVIDER_DAILY_LIMITS, get_daily_usage
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 
+@router.get("/active-jobs")
+async def get_active_jobs(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Every AI job currently running across all projects, in one view.
+
+    Covers build pipelines (scaffolding / generating / CI-QA) with their live
+    step counters so the dashboard can show what is busy where.
+    """
+    from app.models.build import Build, BuildStatus  # noqa: PLC0415
+
+    rows = (
+        await db.execute(
+            select(Build, Project.name)
+            .join(Project, Project.id == Build.project_id)
+            .where(
+                Build.deleted_at.is_(None),
+                Build.status.in_([
+                    BuildStatus.scaffolding,
+                    BuildStatus.generating,
+                    BuildStatus.qa,
+                ]),
+            )
+            .order_by(Build.updated_at.desc())
+        )
+    ).all()
+
+    jobs: list[dict[str, Any]] = []
+    for build, project_name in rows:
+        gp = dict(build.generation_progress or {})
+        report = dict(build.quality_report or {})
+        auto_ci = dict(report.get("auto_ci") or {})
+        done = len(gp.get("completed_task_ids") or [])
+        total = gp.get("total_tasks")
+        jobs.append({
+            "build_id": str(build.id),
+            "project_id": str(build.project_id),
+            "project_name": project_name,
+            "version": build.version,
+            "status": build.status.value,
+            "phase": auto_ci.get("phase") or gp.get("phase"),
+            "message": auto_ci.get("message") or gp.get("message"),
+            "current_task": gp.get("current_task"),
+            "done_tasks": done,
+            "total_tasks": total,
+            "heartbeat_at": gp.get("heartbeat_at"),
+            "updated_at": build.updated_at.isoformat() if build.updated_at else None,
+        })
+    return {"jobs": jobs, "count": len(jobs)}
+
+
 @router.get("/stats")
 async def get_dashboard_stats(
     db: AsyncSession = Depends(get_db),

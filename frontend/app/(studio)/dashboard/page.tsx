@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type DashboardStats, type UserResponse } from "@/lib/api";
+import Link from "next/link";
+import { api, type ActiveJob, type DashboardStats, type UserResponse } from "@/lib/api";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -107,15 +108,21 @@ const PROVIDER_COLOR: Record<string, string> = {
 export default function DashboardPage() {
   const [user,  setUser]  = useState<UserResponse | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [jobs,  setJobs]  = useState<ActiveJob[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tick,  setTick]  = useState(0);          // clock refresh
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [u, s] = await Promise.all([api.me(), api.getDashboardStats()]);
+      const [u, s, j] = await Promise.all([
+        api.me(),
+        api.getDashboardStats(),
+        api.getActiveJobs().catch(() => ({ jobs: [], count: 0 })),
+      ]);
       setUser(u);
       setStats(s);
+      setJobs(j.jobs);
       setError(null);
     } catch {
       setError("Could not load dashboard stats — retrying…");
@@ -187,6 +194,61 @@ export default function DashboardPage() {
         <div className="flex items-center gap-2 rounded-lg border border-amber-800/40 bg-amber-950/20 px-4 py-2.5 text-sm text-amber-400">
           <i className="ti ti-alert-triangle" aria-hidden /> {error}
         </div>
+      )}
+
+      {/* ── Running AI jobs (live, across all projects) ───────────────── */}
+      {jobs.length > 0 && (
+        <section className="rounded-xl border border-blue-900/50 bg-blue-950/15 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-blue-300">
+              <i className="ti ti-activity-heartbeat animate-pulse" aria-hidden />
+              Running now — {jobs.length} job{jobs.length > 1 ? "s" : ""}
+            </h2>
+            <span className="text-[10px] text-gray-600">auto-refresh 30s</span>
+          </div>
+          <div className="space-y-2">
+            {jobs.map((j) => {
+              const pctDone = j.total_tasks
+                ? Math.min(99, Math.round((j.done_tasks / j.total_tasks) * 100))
+                : null;
+              return (
+                <Link
+                  key={j.build_id}
+                  href={`/build/${j.build_id}`}
+                  className="block rounded-lg border border-gray-800 bg-gray-900/60 px-3 py-2.5 transition hover:border-blue-700"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-medium text-gray-200">
+                      {j.project_name}
+                      <span className="ml-1.5 text-xs text-gray-500">Build v{j.version}</span>
+                    </p>
+                    <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-400">
+                      {j.phase ?? j.status}
+                    </span>
+                  </div>
+                  {j.total_tasks ? (
+                    <div className="mt-2 flex items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-800">
+                        <div
+                          className="h-full rounded-full bg-blue-600 transition-all"
+                          style={{ width: `${Math.max(3, pctDone ?? 0)}%` }}
+                        />
+                      </div>
+                      <span className="text-[11px] tabular-nums text-gray-400">
+                        {j.done_tasks}/{j.total_tasks}
+                      </span>
+                    </div>
+                  ) : null}
+                  {(j.message || j.current_task) && (
+                    <p className="mt-1.5 truncate text-xs text-gray-500">
+                      {j.message ?? j.current_task}
+                    </p>
+                  )}
+                </Link>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       {/* ── Top stat cards ───────────────────────────────────────────── */}
