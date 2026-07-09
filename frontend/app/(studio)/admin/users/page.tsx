@@ -12,6 +12,8 @@ export default function AdminUsersPage() {
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("viewer");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     api.listUsers().then(setUsers).catch(() => setUsers([]));
@@ -19,16 +21,26 @@ export default function AdminUsersPage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    await api.createUser({ email, full_name: fullName, password, role });
-    setEmail("");
-    setFullName("");
-    setPassword("");
-    setUsers(await api.listUsers());
+    if (saving) return; // guard against double-submit creating duplicate users
+    setSaving(true);
+    setError("");
+    try {
+      await api.createUser({ email, full_name: fullName, password, role });
+      setEmail("");
+      setFullName("");
+      setPassword("");
+      setUsers(await api.listUsers());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create user");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">User management</h1>
+      {error && <p className="text-sm text-red-400">{error}</p>}
       <form onSubmit={handleCreate} className="grid max-w-lg gap-2">
         <input
           className="rounded-md border border-gray-700 bg-gray-900 px-3 py-2 text-sm"
@@ -74,7 +86,9 @@ export default function AdminUsersPage() {
             </option>
           ))}
         </select>
-        <Button type="submit">Create user</Button>
+        <Button type="submit" disabled={saving}>
+          {saving ? "Creating…" : "Create user"}
+        </Button>
       </form>
       <div className="rounded-xl border border-gray-800">
         {users.map((u) => (

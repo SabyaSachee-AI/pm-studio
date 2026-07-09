@@ -66,10 +66,17 @@ export default function PrdsPage() {
 
   async function handleGenerate() {
     if (!projectId || !reqId) return;
-    const { task_id } = (await api.generatePrd(projectId, reqId)) as {
-      task_id: string;
-    };
-    aiJob.startJob(task_id, "Generating PRD");
+    try {
+      const { task_id } = (await api.generatePrd(projectId, reqId)) as {
+        task_id: string;
+      };
+      aiJob.startJob(task_id, "Generating PRD");
+    } catch (err) {
+      aiJob.reportError(
+        err instanceof Error ? err.message : "Could not start PRD generation",
+        "Generating PRD",
+      );
+    }
   }
 
   async function handleDelete(e: React.MouseEvent, id: string) {
@@ -79,6 +86,8 @@ export default function PrdsPage() {
     try {
       await api.deletePrd(id);
       setPrds((prev) => prev.filter((p) => p.id !== id));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Could not delete the PRD");
     } finally {
       setDeletingId(null);
     }

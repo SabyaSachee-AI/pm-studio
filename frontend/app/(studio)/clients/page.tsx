@@ -8,6 +8,7 @@ export default function ClientsPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   async function load() {
     setClients(await api.listClients());
@@ -19,9 +20,18 @@ export default function ClientsPage() {
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    await api.createClient({ name });
-    setName("");
-    await load();
+    if (saving) return; // guard against double-submit creating duplicates
+    setSaving(true);
+    setError("");
+    try {
+      await api.createClient({ name });
+      setName("");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create client");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -36,7 +46,9 @@ export default function ClientsPage() {
           onChange={(e) => setName(e.target.value)}
           required
         />
-        <Button type="submit">Add client</Button>
+        <Button type="submit" disabled={saving}>
+          {saving ? "Adding…" : "Add client"}
+        </Button>
       </form>
       <div className="rounded-xl border border-gray-800">
         {clients.map((c) => (

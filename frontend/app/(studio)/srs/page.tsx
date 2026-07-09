@@ -59,10 +59,17 @@ export default function SrsPage() {
 
   async function handleGenerate() {
     if (!projectId || !prdId) return;
-    const { task_id } = (await api.generateSrs(projectId, prdId)) as {
-      task_id: string;
-    };
-    aiJob.startJob(task_id, "Generating SRS");
+    try {
+      const { task_id } = (await api.generateSrs(projectId, prdId)) as {
+        task_id: string;
+      };
+      aiJob.startJob(task_id, "Generating SRS");
+    } catch (err) {
+      aiJob.reportError(
+        err instanceof Error ? err.message : "Could not start SRS generation",
+        "Generating SRS",
+      );
+    }
   }
 
   async function handleDelete(e: React.MouseEvent, id: string) {
@@ -72,6 +79,8 @@ export default function SrsPage() {
     try {
       await api.deleteSrs(id);
       setSrsList((prev) => prev.filter((s) => s.id !== id));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Could not delete the SRS");
     } finally {
       setDeletingId(null);
     }

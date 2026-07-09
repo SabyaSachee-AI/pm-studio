@@ -11,26 +11,42 @@ export default function DecisionsPage() {
   const [title, setTitle] = useState("");
   const [decision, setDecision] = useState("");
   const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.listProjects().then((p) => {
-      setProjects(p);
-      if (p[0]) setProjectId(p[0].id);
-    });
+    api
+      .listProjects()
+      .then((p) => {
+        setProjects(p);
+        if (p[0]) setProjectId(p[0].id);
+      })
+      .catch((e: Error) => setError(e.message));
   }, []);
 
   useEffect(() => {
-    api.listDecisions(projectId || undefined).then(setDecisions);
+    api
+      .listDecisions(projectId || undefined)
+      .then(setDecisions)
+      .catch((e: Error) => setError(e.message));
   }, [projectId]);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!projectId) return;
-    await api.createDecision({ project_id: projectId, title, decision, reason });
-    setTitle("");
-    setDecision("");
-    setReason("");
-    setDecisions(await api.listDecisions(projectId));
+    if (!projectId || saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api.createDecision({ project_id: projectId, title, decision, reason });
+      setTitle("");
+      setDecision("");
+      setReason("");
+      setDecisions(await api.listDecisions(projectId));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save decision");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -72,7 +88,10 @@ export default function DecisionsPage() {
           onChange={(e) => setReason(e.target.value)}
           required
         />
-        <Button type="submit">Record decision</Button>
+        {error && <p className="text-sm text-red-400">{error}</p>}
+        <Button type="submit" disabled={saving}>
+          {saving ? "Saving…" : "Record decision"}
+        </Button>
       </form>
 
       <div className="space-y-3">
