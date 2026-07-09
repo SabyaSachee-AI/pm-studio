@@ -550,6 +550,21 @@ def resume_orphaned_build_jobs() -> int:
     return resumed
 
 
+@celery_app.task(name="build.orphan_sweep")
+def orphan_sweep_task() -> dict[str, int]:
+    """Periodic self-healing (beat): resume builds/watchers whose task died.
+
+    The startup-time resume misses builds that were updated seconds before a
+    restart (not yet "stale"); this sweep catches them on the next tick, so a
+    build can never sit in "generating" forever with no live task.
+    """
+    n_build = resume_orphaned_build_jobs()
+    n_ci = resume_orphaned_auto_ci()
+    if n_build or n_ci:
+        logger.info("Orphan sweep resumed %s build(s), %s auto-CI watcher(s)", n_build, n_ci)
+    return {"builds": n_build, "auto_ci": n_ci}
+
+
 def resume_orphaned_auto_ci() -> int:
     """Re-enqueue auto-CI watchers for builds interrupted by a worker restart."""
     from app.services.build.auto_ci_progress import (  # noqa: PLC0415

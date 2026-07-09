@@ -55,6 +55,15 @@ celery_app.conf.update(
     # hard limit is a last-resort backstop. Normal tasks finish well under these.
     task_soft_time_limit=1800,   # 30 min
     task_time_limit=2400,        # 40 min
+    # Self-healing: periodically re-enqueue builds whose task died (worker
+    # restart/rebuild, crash). Runs via the build worker's embedded beat (-B).
+    beat_schedule={
+        "orphan-build-sweep": {
+            "task": "build.orphan_sweep",
+            "schedule": 90.0,
+            "options": {"queue": "build"},
+        },
+    },
 )
 
 celery_app.autodiscover_tasks(["app.workers"])

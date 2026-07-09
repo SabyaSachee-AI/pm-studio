@@ -17,6 +17,10 @@ export type AiStatusBarProps = {
   attempt?: number;
   /** Short instruction telling the user what to do once this finishes. */
   nextStep?: string;
+  /** Real progress: which step of how many (e.g. task 7 of 40). */
+  currentIndex?: number;
+  totalTasks?: number;
+  currentTask?: string;
   onCancel?: () => void;
   onTryAgain?: () => void;
 };
@@ -28,8 +32,17 @@ export function formatElapsed(seconds: number): string {
   return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
-function progressWidth(status: AiJobStatus): string {
+function progressWidth(
+  status: AiJobStatus,
+  currentIndex?: number,
+  totalTasks?: number,
+): string {
   if (status === "completed" || status === "failed") return "100%";
+  // Real percentage when the job reports step counters (e.g. codegen task 7/40).
+  if (currentIndex && totalTasks && totalTasks > 0) {
+    const pct = Math.min(99, Math.round(((currentIndex - 1) / totalTasks) * 100));
+    return `${Math.max(3, pct)}%`;
+  }
   if (status === "pending") return "25%";
   return "70%";
 }
@@ -75,10 +88,18 @@ export function AiStatusBar({
   phase,
   attempt,
   nextStep,
+  currentIndex,
+  totalTasks,
+  currentTask,
   onCancel,
   onTryAgain,
 }: AiStatusBarProps) {
   if (!isVisible || status === "idle") return null;
+
+  const hasRealProgress = !!(currentIndex && totalTasks && totalTasks > 0);
+  const pctText = hasRealProgress
+    ? `${Math.min(99, Math.round(((currentIndex! - 1) / totalTasks!) * 100))}%`
+    : null;
 
   const headerIcon =
     status === "pending"
@@ -122,9 +143,18 @@ export function AiStatusBar({
       <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-gray-800">
         <div
           className={`h-full rounded-full transition-all duration-500 ${progressClass(status)}`}
-          style={{ width: progressWidth(status) }}
+          style={{ width: progressWidth(status, currentIndex, totalTasks) }}
         />
       </div>
+
+      {/* Real step counter — the honest answer to "how far along is it?" */}
+      {hasRealProgress && (status === "processing" || status === "pending") ? (
+        <p className="mt-1.5 text-xs text-gray-300">
+          <span className="font-medium">Step {currentIndex} of {totalTasks}</span>
+          {pctText ? <span className="text-gray-500"> · {pctText} done</span> : null}
+          {currentTask ? <span className="text-gray-400"> — {currentTask}</span> : null}
+        </p>
+      ) : null}
 
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
         <span>⏱ {formatElapsed(elapsedSeconds)}</span>
@@ -200,7 +230,7 @@ export function aiJobStatusBarProps(aiJob: {
   processingMessage: string;
   taskMeta: TaskStatus["meta"] | null | undefined;
 }): Omit<AiStatusBarProps, "onCancel" | "onTryAgain"> {
-  const meta = aiJob.taskMeta;
+  const meta = aiJob.taskMeta as Record<string, unknown> | null | undefined;
   const metaMessage = typeof meta?.message === "string" ? meta.message : undefined;
   const metaModel = typeof meta?.current_model === "string" ? meta.current_model : undefined;
   const metaPhase = typeof meta?.phase === "string" ? meta.phase : undefined;
@@ -215,5 +245,8 @@ export function aiJobStatusBarProps(aiJob: {
     currentModel: metaModel,
     phase: metaPhase,
     attempt: typeof meta?.attempt === "number" ? meta.attempt : undefined,
+    currentIndex: typeof meta?.current_index === "number" ? meta.current_index : undefined,
+    totalTasks: typeof meta?.total_tasks === "number" ? meta.total_tasks : undefined,
+    currentTask: typeof meta?.current_task === "string" ? meta.current_task : undefined,
   };
 }

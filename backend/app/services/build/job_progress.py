@@ -45,7 +45,7 @@ def persist_build_job_meta(meta: dict[str, Any]) -> None:
             if not build:
                 return
             gp = dict(build.generation_progress or {})
-            for key in ("phase", "message", "current_model", "attempt", "current_task", "current_index"):
+            for key in ("phase", "message", "current_model", "attempt", "current_task", "current_index", "total_tasks"):
                 if key in meta and meta[key] is not None:
                     gp[key] = meta[key]
             gp["heartbeat_at"] = datetime.now(timezone.utc).isoformat()

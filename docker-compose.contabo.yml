@@ -70,7 +70,7 @@ services:
     # Never run more than one replica — duplicate build workers cause GitHub 422 push races.
     # Dedicated queue for long code-build jobs. Concurrency 3 so one project's
     # build never blocks another's (per-build push/auto-ci Redis locks keep it safe).
-    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=3 -Q build -n build@%h
+    command: celery -A app.core.celery_app worker -B --loglevel=info --concurrency=3 -Q build -n build@%h
     env_file:
       - .env
     depends_on:

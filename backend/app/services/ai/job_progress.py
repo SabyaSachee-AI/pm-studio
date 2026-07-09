@@ -13,6 +13,23 @@ logger = logging.getLogger(__name__)
 _sync_progress_key: ContextVar[str | None] = ContextVar("sync_progress_key", default=None)
 _PROGRESS_TTL_SEC = 3600
 
+# Loop-level step info (e.g. task 7/40) merged into every progress publish.
+# Celery update_state REPLACES meta wholesale, so without this the AI router's
+# per-attempt publishes would erase the step counters the UI needs for a real
+# progress bar.
+_job_step: ContextVar[dict[str, Any] | None] = ContextVar("job_step_meta", default=None)
+
+
+@contextmanager
+def job_step_scope(**step: Any) -> Iterator[None]:
+    """Attach step counters (current_index/total_tasks/current_task) to all
+    progress published inside the block."""
+    token = _job_step.set({k: v for k, v in step.items() if v is not None})
+    try:
+        yield
+    finally:
+        _job_step.reset(token)
+
 
 def set_sync_progress_key(key: str | None) -> Token[str | None]:
     """Bind a Redis progress key for the current async request context."""
@@ -88,6 +105,9 @@ async def read_sync_progress(progress_id: str) -> dict[str, Any] | None:
 
 def publish_job_progress(**meta: Any) -> None:
     """Update Celery PROGRESS meta and/or Redis sync progress for the UI."""
+    step = _job_step.get()
+    if step:
+        meta = {**step, **meta}
     try:
         from celery import current_task  # noqa: PLC0415
 

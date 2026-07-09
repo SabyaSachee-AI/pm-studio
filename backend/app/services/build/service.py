@@ -26,6 +26,7 @@ from app.models.project import Project
 from app.models.task import Task, TaskStatus
 from app.schemas.build import GeneratedFileSet, ScaffoldPlan
 from app.services.ai.base import ai_call
+from app.services.ai.job_progress import job_step_scope
 
 logger = logging.getLogger(__name__)
 
@@ -969,7 +970,12 @@ async def generate_build_code(build_id: UUID, db: Session, *, resume: bool = Fal
         last_exc: Exception | None = None
         for attempt in range(1, _MAX_CHUNK_ATTEMPTS + 1):
             try:
-                await _generate_one_task(db, build, task, arch_brief, project_info, protect_edited=True)
+                with job_step_scope(
+                    current_index=idx,
+                    total_tasks=len(ordered),
+                    current_task=task.title,
+                ):
+                    await _generate_one_task(db, build, task, arch_brief, project_info, protect_edited=True)
                 completed.add(str(task.id))
                 build.generation_progress = {**progress, "completed_task_ids": sorted(completed)}
                 db.commit()
@@ -1506,14 +1512,17 @@ async def polish_build(
                 f"path, exports, and behaviour.\n\nFILE: {f.path}\n```\n{f.content[:14000]}\n```\n\n"
                 "Return the improved file (same path) in the files array."
             )
-            result = await ai_call(
-                prompt=prompt,
-                response_model=GeneratedFileSet,
-                system=POLISH_SYSTEM,
-                max_tokens=14000,
-                task_type="code_polish",
-                screen="tasks",
-            )
+            with job_step_scope(
+                current_index=idx, total_tasks=len(targets), current_task=f.path,
+            ):
+                result = await ai_call(
+                    prompt=prompt,
+                    response_model=GeneratedFileSet,
+                    system=POLISH_SYSTEM,
+                    max_tokens=14000,
+                    task_type="code_polish",
+                    screen="tasks",
+                )
             out = next((x for x in result.files if x.content.strip()), None)
             if out:
                 _persist_file(db, build, f.path, out.content, out.language or f.language,
