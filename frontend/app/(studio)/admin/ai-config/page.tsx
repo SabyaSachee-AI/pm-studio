@@ -643,8 +643,8 @@ function VpsSection() {
             <input className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 text-sm text-gray-200" value={user} onChange={(e) => setUser(e.target.value)} placeholder="root or deploy" />
           </label>
         </div>
-        <label className="block text-xs text-gray-500">App path on VPS
-          <input className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 font-mono text-sm text-gray-200" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/opt/myapp" />
+        <label className="block text-xs text-gray-500">Base path on VPS — each project auto-deploys to its own folder: base/&lt;repo-name&gt;
+          <input className="mt-1 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1.5 font-mono text-sm text-gray-200" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/opt/apps" />
         </label>
         {editingKey || !cfg?.has_key ? (
           <label className="block text-xs text-gray-500">SSH private key
