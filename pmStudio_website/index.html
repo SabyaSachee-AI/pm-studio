@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PM Studio — The Software Factory of Sabyasachee</title>
+<meta name="description" content="PM Studio: an AI software factory. Raw client requirements enter, deployed production apps exit. AI does the labor — human judgment is the quality gate.">
+<style>
+/* ─── Design tokens ───────────────────────────────────────────────────── */
+:root{
+  --bg:#0a0c10; --bg2:#0f1319; --panel:#12161e; --line:#1f2733;
+  --text:#e6ebf2; --muted:#8a94a6; --dim:#5c6675;
+  --accent:#3b9eff; --accent-soft:rgba(59,158,255,.12); --accent-line:rgba(59,158,255,.45);
+  --good:#3ddc97; --warn:#ffb454;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.6;overflow-x:hidden}
+::selection{background:var(--accent);color:#04121f}
+
+h1{font-size:clamp(2.2rem,6vw,4.6rem);line-height:1.05;letter-spacing:-.02em;font-weight:800}
+h2{font-size:clamp(1.6rem,3.5vw,2.6rem);letter-spacing:-.01em;font-weight:750}
+h3{font-size:clamp(1.05rem,2vw,1.3rem);font-weight:650}
+p{max-width:64ch}
+a{color:var(--accent);text-decoration:none}
+a:hover,a:focus-visible{text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+
+.wrap{max-width:1100px;margin:0 auto;padding:0 clamp(1rem,4vw,2.5rem)}
+section{padding:clamp(4rem,9vw,8rem) 0;position:relative}
+.kicker{font-family:var(--mono);font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin-bottom:1rem}
+.lead{color:var(--muted);font-size:clamp(1rem,1.6vw,1.2rem);margin-top:1rem}
+
+/* ─── Conveyor belt: page-length progress line ───────────────────────── */
+#belt{position:fixed;top:0;left:clamp(.6rem,2.5vw,2rem);width:2px;height:100vh;background:var(--line);z-index:5}
+#belt-fill{width:100%;height:0;background:linear-gradient(180deg,var(--accent),#7fc4ff);box-shadow:0 0 12px var(--accent-line)}
+#belt-dot{position:absolute;left:-4px;width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent);transition:top .1s linear}
+@media(max-width:640px){#belt{display:none}}
+
+/* ─── Reveal on scroll ───────────────────────────────────────────────── */
+.reveal{opacity:0;transform:translateY(26px);transition:opacity .7s ease,transform .7s ease}
+.reveal.visible{opacity:1;transform:none}
+
+/* ─── Hero ───────────────────────────────────────────────────────────── */
+#hero{min-height:92vh;display:flex;align-items:center;background:
+  radial-gradient(1000px 500px at 75% -10%,rgba(59,158,255,.14),transparent 60%),
+  radial-gradient(700px 400px at 10% 110%,rgba(59,158,255,.07),transparent 60%),var(--bg)}
+#hero .glow{color:var(--accent)}
+.pipeline{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem;margin-top:2.2rem;font-family:var(--mono);font-size:clamp(.62rem,1.4vw,.8rem);color:var(--muted)}
+.pipeline .st{padding:.32rem .6rem;border:1px solid var(--line);border-radius:99px;background:var(--panel);white-space:nowrap;animation:pulse 3.6s ease-in-out infinite}
+.pipeline .st:nth-child(2){animation-delay:.45s}.pipeline .st:nth-child(4){animation-delay:.9s}
+.pipeline .st:nth-child(6){animation-delay:1.35s}.pipeline .st:nth-child(8){animation-delay:1.8s}
+.pipeline .st:nth-child(10){animation-delay:2.25s}.pipeline .st:nth-child(12){animation-delay:2.7s}
+.pipeline .st:nth-child(14){animation-delay:3.15s}
+.pipeline .arrow{color:var(--dim)}
+@keyframes pulse{0%,100%{border-color:var(--line);color:var(--muted)}50%{border-color:var(--accent);color:var(--text);box-shadow:0 0 14px rgba(59,158,255,.25)}}
+.ctas{display:flex;gap:.9rem;margin-top:2.4rem;flex-wrap:wrap}
+.btn{display:inline-block;padding:.85rem 1.6rem;border-radius:10px;font-weight:650;font-size:.95rem;transition:transform .15s ease,box-shadow .15s ease}
+.btn:hover{text-decoration:none;transform:translateY(-2px)}
+.btn-primary{background:var(--accent);color:#04121f;box-shadow:0 6px 24px rgba(59,158,255,.35)}
+.btn-ghost{border:1px solid var(--line);color:var(--text);background:var(--panel)}
+.btn-ghost:hover{border-color:var(--accent)}
+
+/* ─── Philosophy split ───────────────────────────────────────────────── */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:1.4rem;margin-top:2.6rem}
+@media(max-width:760px){.split{grid-template-columns:1fr}}
+.half{border:1px solid var(--line);border-radius:16px;padding:2rem;background:var(--panel)}
+.half.ai{border-top:3px solid var(--accent)}
+.half.human{border-top:3px solid var(--good)}
+.half h3{margin-bottom:.8rem}
+.half ul{list-style:none;margin-top:1rem}
+.half li{padding:.42rem 0;color:var(--muted);font-size:.95rem}
+.half li::before{content:"▸ ";color:var(--accent)}
+.half.human li::before{color:var(--good)}
+
+/* ─── Assembly line stations ─────────────────────────────────────────── */
+.station{border:1px solid var(--line);border-radius:18px;background:var(--panel);margin-top:2rem;overflow:hidden;transition:border-color .4s ease,box-shadow .4s ease}
+.station.visible{border-color:rgba(59,158,255,.35);box-shadow:0 0 40px rgba(59,158,255,.05)}
+.station-head{display:flex;align-items:center;gap:1rem;padding:1.5rem 1.7rem;border-bottom:1px solid var(--line)}
+.station-num{font-family:var(--mono);font-size:1.5rem;font-weight:700;color:var(--accent);min-width:2.4rem}
+.station-head small{display:block;color:var(--dim);font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase}
+.tabs{display:flex;border-bottom:1px solid var(--line);background:var(--bg2)}
+.tab-btn{flex:1;padding:.75rem .5rem;background:none;border:none;color:var(--dim);font-family:var(--mono);font-size:.72rem;letter-spacing:.06em;cursor:pointer;border-bottom:2px solid transparent}
+.tab-btn[aria-selected="true"]{color:var(--text);border-bottom-color:var(--accent);background:var(--panel)}
+.tab-btn:hover{color:var(--text)}
+.tab-panel{display:none;padding:1.5rem 1.7rem;min-height:150px}
+.tab-panel.active{display:block}
+.tab-panel p{color:var(--muted);font-size:.95rem}
+.think{border-left:3px solid var(--good);padding:.7rem 1rem;background:rgba(61,220,151,.05);border-radius:0 8px 8px 0;margin-top:1rem;font-style:italic;color:var(--text);font-size:.93rem}
+.role-tag{display:inline-block;font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--good);border:1px solid rgba(61,220,151,.4);border-radius:99px;padding:.18rem .65rem;margin-bottom:.9rem}
+.btn-table{width:100%;border-collapse:collapse;margin-top:.4rem;font-size:.88rem}
+.btn-table td{padding:.55rem .6rem;border-bottom:1px solid var(--line);vertical-align:top;color:var(--muted)}
+.btn-table td:first-child{white-space:nowrap;font-family:var(--mono);font-size:.78rem;color:var(--text)}
+.btn-chip{display:inline-block;border:1px solid var(--accent-line);background:var(--accent-soft);color:#9ccdff;border-radius:7px;padding:.14rem .55rem}
+.btn-chip.green{border-color:rgba(61,220,151,.5);background:rgba(61,220,151,.08);color:var(--good)}
+.btn-chip.red{border-color:rgba(255,99,99,.45);background:rgba(255,99,99,.08);color:#ff9c9c}
+
+/* ─── Day timeline ───────────────────────────────────────────────────── */
+.timeline{margin-top:2.6rem;border-left:2px solid var(--line);padding-left:1.6rem}
+.tl-item{position:relative;padding-bottom:1.9rem}
+.tl-item::before{content:"";position:absolute;left:calc(-1.6rem - 7px);top:.35rem;width:12px;height:12px;border-radius:50%;background:var(--bg);border:2px solid var(--accent)}
+.tl-time{font-family:var(--mono);color:var(--accent);font-size:.8rem}
+.tl-item h3{margin:.15rem 0 .3rem}
+.tl-item p{color:var(--muted);font-size:.93rem}
+.tl-item .human-note{color:var(--good);font-size:.85rem;font-family:var(--mono)}
+
+/* ─── Machine room terminal ──────────────────────────────────────────── */
+.terminal{background:#080a0e;border:1px solid var(--line);border-radius:14px;margin-top:2.4rem;font-family:var(--mono);font-size:.83rem;overflow:hidden}
+.term-bar{display:flex;gap:.4rem;padding:.6rem .9rem;border-bottom:1px solid var(--line)}
+.term-bar span{width:10px;height:10px;border-radius:50%;background:var(--line)}
+.term-bar span:first-child{background:#ff5f57}.term-bar span:nth-child(2){background:#febc2e}.term-bar span:nth-child(3){background:#28c840}
+.terminal pre{padding:1.2rem 1.4rem;overflow-x:auto;color:var(--muted);line-height:1.85}
+.terminal .g{color:var(--good)}.terminal .b{color:var(--accent)}.terminal .y{color:var(--warn)}
+
+/* ─── Showcase ───────────────────────────────────────────────────────── */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1.3rem;margin-top:2.4rem}
+.card{border:1px solid var(--line);border-radius:16px;padding:1.7rem;background:var(--panel);transition:transform .2s ease,border-color .2s ease;display:flex;flex-direction:column}
+.card:hover{transform:translateY(-4px);border-color:var(--accent)}
+.card .tag{font-family:var(--mono);font-size:.65rem;letter-spacing:.16em;text-transform:uppercase;color:var(--good);margin-bottom:.7rem}
+.card .tag.soon{color:var(--warn)}
+.card p{color:var(--muted);font-size:.9rem;flex:1}
+.card a{margin-top:1rem;font-size:.88rem;font-family:var(--mono)}
+
+/* ─── Footer ─────────────────────────────────────────────────────────── */
+footer{border-top:1px solid var(--line);padding:3rem 0;color:var(--dim);font-size:.88rem}
+footer .wrap{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+</style>
+</head>
+<body>
+
+<div id="belt" aria-hidden="true"><div id="belt-fill"></div><div id="belt-dot"></div></div>
+
+<!-- ═══ 1. HERO ═══════════════════════════════════════════════════════ -->
+<section id="hero">
+  <div class="wrap">
+    <p class="kicker">PM Studio · An operational AI software factory</p>
+    <h1>The Software Factory<br>of <span class="glow">Sabyasachee</span></h1>
+    <p class="lead">Raw client requirements enter. Deployed production applications exit.
+    AI generates every artifact on the line — a human expert evaluates, edits, and
+    finalizes at every station. Nothing ships on the machine's word alone.</p>
+    <div class="pipeline" role="img" aria-label="Pipeline: requirement to PRD to SRS to architecture to tasks to code to CI QA to deploy">
+      <span class="st">REQUIREMENT</span><span class="arrow">→</span>
+      <span class="st">PRD</span><span class="arrow">→</span>
+      <span class="st">SRS</span><span class="arrow">→</span>
+      <span class="st">ARCHITECTURE</span><span class="arrow">→</span>
+      <span class="st">TASKS</span><span class="arrow">→</span>
+      <span class="st">CODE</span><span class="arrow">→</span>
+      <span class="st">CI / QA</span><span class="arrow">→</span>
+      <span class="st">DEPLOY</span>
+    </div>
+    <div class="ctas">
+      <a class="btn btn-primary" href="#line">Tour the factory</a>
+      <a class="btn btn-ghost" href="#showcase">See it live</a>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 2. PHILOSOPHY ═════════════════════════════════════════════════ -->
+<section id="philosophy">
+  <div class="wrap">
+    <p class="kicker reveal">The operating principle</p>
+    <h2 class="reveal">AI does the labor.<br>Human judgment is the quality gate.</h2>
+    <div class="split">
+      <div class="half ai reveal">
+        <h3>🤖 What the machines do</h3>
+        <p style="color:var(--muted);font-size:.95rem">A 21-model AI chain with automatic
+        failover writes every document and every line of code — around the clock,
+        never blocked by a single provider's limits.</p>
+        <ul>
+          <li>Analyze raw requirement documents</li>
+          <li>Draft PRD, SRS, six architecture documents</li>
+          <li>Break plans into ordered developer tasks</li>
+          <li>Generate, polish, and test the entire codebase</li>
+          <li>Read failed CI logs and repair the code themselves</li>
+        </ul>
+      </div>
+      <div class="half human reveal">
+        <h3>🧠 What only a human decides</h3>
+        <p style="color:var(--muted);font-size:.95rem">Every artifact must pass a named
+        human role who can edit anything and whose <em>Finalize</em> is the only key
+        that unlocks the next station.</p>
+        <ul>
+          <li>Is this what the client actually meant?</li>
+          <li>Will this architecture survive production?</li>
+          <li>Does the code run on <em>my</em> machine — not just in theory?</li>
+          <li>Can every shipped feature be traced back to a client need?</li>
+          <li>Only then: deploy.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 3. ASSEMBLY LINE ══════════════════════════════════════════════ -->
+<section id="line">
+  <div class="wrap">
+    <p class="kicker reveal">The assembly line</p>
+    <h2 class="reveal">Seven stations. Seven human sign-offs.</h2>
+    <p class="lead reveal">Open each station: what the AI produces, who judges it —
+    and exactly which buttons carry the human's authority.</p>
+
+    <!-- Station 1 -->
+    <article class="station reveal" data-station>
+      <div class="station-head">
+        <span class="station-num">01</span>
+        <div><small>Station · Intake</small><h3>Requirements Lab</h3></div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Station 1 layers">
+        <button class="tab-btn" role="tab" aria-selected="true">① AI produces</button>
+        <button class="tab-btn" role="tab" aria-selected="false">② Human judges</button>
+        <button class="tab-btn" role="tab" aria-selected="false">③ The buttons</button>
+      </div>
+      <div class="tab-panel active" role="tabpanel">
+        <p>The AI reads the uploaded client document end to end, extracts the true scope,
+        finds what is <em>missing</em>, and raises clarifying questions — each with a
+        suggested answer so nothing stalls waiting for a reply.</p>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <span class="role-tag">Business Analyst</span>
+        <p>Reads the analysis next to the original document, question by question.</p>
+        <div class="think">"Is this what the client actually meant — or what they happened
+        to write? What did they forget to say that production will demand?"</div>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <table class="btn-table">
+          <tr><td><span class="btn-chip">Upload</span></td><td>Feed the raw client document into the factory.</td></tr>
+          <tr><td><span class="btn-chip">Re-analyze</span></td><td>Write instructions in plain words — the AI rewrites the analysis to match the analyst's correction.</td></tr>
+          <tr><td><span class="btn-chip green">Confirm &amp; Finalize</span></td><td>The analyst's signature. Locks the requirement as the single source of truth for every station downstream.</td></tr>
+        </table>
+      </div>
+    </article>
+
+    <!-- Station 2 -->
+    <article class="station reveal" data-station>
+      <div class="station-head">
+        <span class="station-num">02</span>
+        <div><small>Station · Product definition</small><h3>PRD Bay</h3></div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Station 2 layers">
+        <button class="tab-btn" role="tab" aria-selected="true">① AI produces</button>
+        <button class="tab-btn" role="tab" aria-selected="false">② Human judges</button>
+        <button class="tab-btn" role="tab" aria-selected="false">③ The buttons</button>
+      </div>
+      <div class="tab-panel active" role="tabpanel">
+        <p>From the finalized requirement, the AI writes a complete Product Requirements
+        Document: goals, personas, feature list, success metrics — structured JSON under
+        the hood, never loose prose.</p>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <span class="role-tag">Product Manager</span>
+        <p>Walks the feature list against the goal statement, hunting for padding.</p>
+        <div class="think">"Does every feature serve the goal? Is the scope honest —
+        or is the document promising what the budget cannot deliver?"</div>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <table class="btn-table">
+          <tr><td><span class="btn-chip">Generate PRD</span></td><td>AI drafts the full document from the finalized requirement.</td></tr>
+          <tr><td><span class="btn-chip">Feedback + regenerate</span></td><td>The PM types what is wrong; the AI rewrites that draft — the PM's words steer the machine.</td></tr>
+          <tr><td><span class="btn-chip green">Finalize</span></td><td>Product scope is now law. The SRS station unlocks.</td></tr>
+        </table>
+      </div>
+    </article>
+
+    <!-- Station 3 -->
+    <article class="station reveal" data-station>
+      <div class="station-head">
+        <span class="station-num">03</span>
+        <div><small>Station · Engineering spec</small><h3>SRS Bay</h3></div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Station 3 layers">
+        <button class="tab-btn" role="tab" aria-selected="true">① AI produces</button>
+        <button class="tab-btn" role="tab" aria-selected="false">② Human judges</button>
+        <button class="tab-btn" role="tab" aria-selected="false">③ The buttons</button>
+      </div>
+      <div class="tab-panel active" role="tabpanel">
+        <p>The AI converts the PRD into an IEEE-830 software requirements specification:
+        numbered functional requirements (FR-1, FR-2…) and non-functional requirements,
+        each one written to be individually testable.</p>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <span class="role-tag">Systems Analyst</span>
+        <p>Reads every FR like a test engineer will read it later.</p>
+        <div class="think">"Is every FR testable and unambiguous? If two developers read
+        FR-7, will they build the same thing?"</div>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <table class="btn-table">
+          <tr><td><span class="btn-chip">Generate SRS</span></td><td>AI derives the numbered spec from the finalized PRD.</td></tr>
+          <tr><td><span class="btn-chip">Comment + rewrite</span></td><td>Ambiguous clauses get the analyst's comment; the AI rewrites precisely those.</td></tr>
+          <tr><td><span class="btn-chip green">Finalize</span></td><td>The FR numbering freezes — traceability will hold every later artifact against these IDs.</td></tr>
+        </table>
+      </div>
+    </article>
+
+    <!-- Station 4 -->
+    <article class="station reveal" data-station>
+      <div class="station-head">
+        <span class="station-num">04</span>
+        <div><small>Station · The deepest human station</small><h3>Architecture Studio</h3></div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Station 4 layers">
+        <button class="tab-btn" role="tab" aria-selected="true">① AI produces</button>
+        <button class="tab-btn" role="tab" aria-selected="false">② Human judges</button>
+        <button class="tab-btn" role="tab" aria-selected="false">③ The buttons</button>
+      </div>
+      <div class="tab-panel active" role="tabpanel">
+        <p>Six cross-linked documents in one pass: technology stack, entity-relationship
+        diagram, API design, folder structure, security model, and deployment plan —
+        every table wired to the APIs that touch it.</p>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <span class="role-tag">Software Architect</span>
+        <p>This is where the most experienced brain in the factory earns its keep. The
+        architect can edit any document inline, add sections, and change the stack itself.</p>
+        <div class="think">"Will this survive production? Do the tables match the APIs
+        that query them? Where does this design break at 10× the load — and is that
+        acceptable for this client?"</div>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <table class="btn-table">
+          <tr><td><span class="btn-chip">Edit inline</span></td><td>Change any sentence, table, or endpoint directly — the architect's hand overrides the machine's.</td></tr>
+          <tr><td><span class="btn-chip">Add / modify</span></td><td>Add sections, swap technologies, tighten the security model.</td></tr>
+          <tr><td><span class="btn-chip">Regenerate one doc</span></td><td>Redo a single document (say, the ERD) without disturbing the other five.</td></tr>
+          <tr><td><span class="btn-chip green">Finalize</span></td><td>Only the architect's finalize unlocks task planning. No architecture, no tasks.</td></tr>
+        </table>
+      </div>
+    </article>
+
+    <!-- Station 5 -->
+    <article class="station reveal" data-station>
+      <div class="station-head">
+        <span class="station-num">05</span>
+        <div><small>Station · Work breakdown</small><h3>Kanban Planning Floor</h3></div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Station 5 layers">
+        <button class="tab-btn" role="tab" aria-selected="true">① AI produces</button>
+        <button class="tab-btn" role="tab" aria-selected="false">② Human judges</button>
+        <button class="tab-btn" role="tab" aria-selected="false">③ The buttons</button>
+      </div>
+      <div class="tab-panel active" role="tabpanel">
+        <p>The AI breaks the finalized plan into dependency-ordered developer tasks —
+        each linked to its FR, each with a generated developer spec: files to create,
+        endpoints to expose, acceptance criteria.</p>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <span class="role-tag">Tech Lead</span>
+        <p>Scans the board the way a foreman scans a shift plan.</p>
+        <div class="think">"Is the dependency order right — will task 9 compile without
+        task 4? Is any task secretly three tasks wearing one card?"</div>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <table class="btn-table">
+          <tr><td><span class="btn-chip">Extract tasks</span></td><td>AI derives the ordered task board from PRD + SRS + architecture.</td></tr>
+          <tr><td><span class="btn-chip">Generate specs</span></td><td>Every task gets its developer-ready technical spec.</td></tr>
+          <tr><td><span class="btn-chip">Drag &amp; edit</span></td><td>Reorder columns, split cards, rewrite specs — the lead's plan wins.</td></tr>
+        </table>
+      </div>
+    </article>
+
+    <!-- Station 6 -->
+    <article class="station reveal" data-station>
+      <div class="station-head">
+        <span class="station-num">06</span>
+        <div><small>Station · Production line</small><h3>Build Factory</h3></div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Station 6 layers">
+        <button class="tab-btn" role="tab" aria-selected="true">① AI produces</button>
+        <button class="tab-btn" role="tab" aria-selected="false">② Human judges</button>
+        <button class="tab-btn" role="tab" aria-selected="false">③ The buttons</button>
+      </div>
+      <div class="tab-panel active" role="tabpanel">
+        <p>An eight-step line: <strong>Scaffold → Generate code → Polish → Tests →
+        Push to GitHub → Run CI/QA → Local UI test → Deploy</strong>. Generation is
+        resumable — a restart continues from the exact task it stopped at, on a
+        21-model fallback chain. The status bar tells the truth: a real
+        <em style="font-family:var(--mono)">"Step 7 of 40 · 15% done"</em>, never a fake spinner.
+        When CI fails, the auto-repair loop reads the logs, fixes the code, re-pushes —
+        until green or a human is called.</p>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <span class="role-tag">QA + Studio Owner</span>
+        <p>The machine writes the code; the human refuses to trust it until it proves itself twice.</p>
+        <div class="think">"Does CI pass? Fine. Now — does it run on <em>my</em> machine,
+        clicked by <em>my</em> hands? Only then does it earn a deploy."</div>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <table class="btn-table">
+          <tr><td><span class="btn-chip">Scaffold</span></td><td>Repo skeleton, Dockerfiles, deterministic CI/CD workflows.</td></tr>
+          <tr><td><span class="btn-chip">Generate code</span></td><td>Task-by-task codebase generation — resumable, honest progress.</td></tr>
+          <tr><td><span class="btn-chip">Polish / Tests</span></td><td>Optional quality passes: production-grade rewrite + test suite.</td></tr>
+          <tr><td><span class="btn-chip">Push to GitHub</span></td><td>Code only — leaves a window to clone and test locally first.</td></tr>
+          <tr><td><span class="btn-chip">Run CI / QA</span></td><td>The human starts the quality gate deliberately, never by accident.</td></tr>
+          <tr><td><span class="btn-chip red">Cancel</span></td><td>Truly stops the server-side job — not just the screen.</td></tr>
+          <tr><td><span class="btn-chip green">Deploy to VPS</span></td><td>Each project gets its own folder and its own auto-assigned port. Health-checked, auto-rollback.</td></tr>
+        </table>
+      </div>
+    </article>
+
+    <!-- Station 7 -->
+    <article class="station reveal" data-station>
+      <div class="station-head">
+        <span class="station-num">07</span>
+        <div><small>Station · Final inspection</small><h3>Traceability Control Room</h3></div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Station 7 layers">
+        <button class="tab-btn" role="tab" aria-selected="true">① AI produces</button>
+        <button class="tab-btn" role="tab" aria-selected="false">② Human judges</button>
+        <button class="tab-btn" role="tab" aria-selected="false">③ The buttons</button>
+      </div>
+      <div class="tab-panel active" role="tabpanel">
+        <p>The AI cross-checks the whole chain — requirement → FR → task → code — and
+        lists every gap: unanswered questions, features without FRs, FRs without tasks,
+        orphaned tasks, plan drift. It can resolve all of them <em>append-only</em>:
+        source documents are amended with a changelog, never overwritten.</p>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <span class="role-tag">Studio Owner</span>
+        <p>The last set of eyes before the factory certifies the product.</p>
+        <div class="think">"Can I trace every shipped feature back to a client need —
+        and every client need forward to shipped code? If not, the gate stays shut."</div>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <table class="btn-table">
+          <tr><td><span class="btn-chip">Numbered gap rows</span></td><td>Seven ordered checks, each with a one-click fix.</td></tr>
+          <tr><td><span class="btn-chip">Resolve all gaps</span></td><td>Runs the fixes in dependency order, live progress, confirmation at the end.</td></tr>
+          <tr><td><span class="btn-chip green">Go to Build</span></td><td>Appears only at 100% coverage — the gate literally does not exist until the chain is whole.</td></tr>
+        </table>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- ═══ 4. A DAY WITH SABYASACHEE ═════════════════════════════════════ -->
+<section id="day">
+  <div class="wrap">
+    <p class="kicker reveal">One person, one day</p>
+    <h2 class="reveal">A day on the factory floor</h2>
+    <p class="lead reveal">The machines never sleep — but watch where the human decisions are.</p>
+    <div class="timeline">
+      <div class="tl-item reveal"><span class="tl-time">09:00</span><h3>Client PDF arrives</h3>
+        <p>Sabyasachee uploads the raw requirement document. The AI reads it and raises 12 clarifying questions with suggested answers.</p>
+        <p class="human-note">→ human: edits 4 of the 12 suggestions where the AI guessed the client's intent wrong.</p></div>
+      <div class="tl-item reveal"><span class="tl-time">09:20</span><h3>Requirement finalized</h3>
+        <p>As Business Analyst, he presses <strong>Confirm &amp; Finalize</strong>. The source of truth is locked.</p></div>
+      <div class="tl-item reveal"><span class="tl-time">09:40</span><h3>PRD approved</h3>
+        <p>The generated PRD promises a feature the budget can't carry. One feedback line, one regenerate — scope is honest now. Finalized.</p></div>
+      <div class="tl-item reveal"><span class="tl-time">10:30</span><h3>Architecture inspected</h3>
+        <p>Wearing the Architect's hat: the ERD misses an index the API design clearly needs. He edits it inline, regenerates only the deploy doc, and signs off.</p>
+        <p class="human-note">→ human: this station is never rushed. The factory waits for the architect.</p></div>
+      <div class="tl-item reveal"><span class="tl-time">11:00</span><h3>The line runs</h3>
+        <p>Tasks extracted, specs generated, Build started. The status bar reads "Step 12 of 40 · 28% done". He goes to lunch — generation is resumable and self-healing.</p></div>
+      <div class="tl-item reveal"><span class="tl-time">15:00</span><h3>Local proof</h3>
+        <p>Code pushed to GitHub. He clones it, runs it on his own machine, clicks through every screen. Two fixes committed locally, pushed back.</p></div>
+      <div class="tl-item reveal"><span class="tl-time">16:00</span><h3>The gate</h3>
+        <p><strong>Run CI/QA</strong> — deliberately, by hand. CI fails once; the auto-repair loop reads the logs, fixes, re-pushes. Green.</p></div>
+      <div class="tl-item reveal"><span class="tl-time">17:30</span><h3>Deployed</h3>
+        <p>Traceability shows 7/7 checks passed. <strong>Deploy to VPS</strong> — its own folder, its own port, health-checked. The client gets a URL, not a promise.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 5. MACHINE ROOM ═══════════════════════════════════════════════ -->
+<section id="machine">
+  <div class="wrap">
+    <p class="kicker reveal">The machine room</p>
+    <h2 class="reveal">Built to keep running</h2>
+    <div class="terminal reveal" role="img" aria-label="Terminal showing PM Studio infrastructure capabilities">
+      <div class="term-bar"><span></span><span></span><span></span></div>
+      <pre>
+$ pm-studio status
+<span class="b">ai-chain</span>      21/21 models READY · auto-failover · 402/429 aware cooldowns
+<span class="b">workers</span>       celery ×2 queues · resumable codegen · orphan sweep every 90s
+<span class="b">build</span>         honest progress (step n of total) · cancel = real stop
+<span class="b">ci</span>            manual gate · auto-repair loop reads logs → fixes → re-pushes
+<span class="b">deploy</span>        per-project folder · auto port isolation · health-gate + rollback
+<span class="b">traceability</span>  requirement → FR → task → code · append-only gap resolution
+<span class="g">all systems operational</span> — <span class="y">human approval still required to ship</span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 6. SHOWCASE ═══════════════════════════════════════════════════ -->
+<section id="showcase">
+  <div class="wrap">
+    <p class="kicker reveal">Off the line</p>
+    <h2 class="reveal">Products built in this factory</h2>
+    <div class="grid">
+      <div class="card reveal">
+        <p class="tag">● Live</p>
+        <h3>VNT — Voice-Note-Transformer</h3>
+        <p>Notes with live transcription, AI-assisted actions, document import and
+        Google Drive backup. FastAPI + Next.js + Celery — generated, repaired, and
+        deployed by the factory.</p>
+        <a href="http://185.185.80.147:8091" rel="noopener">Visit VNT →</a>
+      </div>
+      <div class="card reveal">
+        <p class="tag soon">◌ In production</p>
+        <h3>Project — confidential</h3>
+        <p>Currently on the assembly line. The architect has finalized; the Build
+        Factory is generating.</p>
+      </div>
+      <div class="card reveal">
+        <p class="tag soon">◌ In production</p>
+        <h3>Project — confidential</h3>
+        <p>Requirements finalized, PRD under review by the Product Manager.</p>
+      </div>
+      <div class="card reveal">
+        <p class="tag soon">◌ Slot open</p>
+        <h3>Your product</h3>
+        <p>A raw idea is enough — the factory turns it into a specified, tested,
+        deployed application with a full audit trail.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ 7. FOOTER ═════════════════════════════════════════════════════ -->
+<footer>
+  <div class="wrap">
+    <span>Built by <strong style="color:var(--text)">SABYASACHEE</strong> · PM Studio runs on its own VPS</span>
+    <a href="https://github.com/SabyaSachee-AI" rel="noopener">github.com/SabyaSachee-AI</a>
+  </div>
+</footer>
+
+<script>
+/* Conveyor belt scroll progress */
+(function(){
+  var fill=document.getElementById("belt-fill"),dot=document.getElementById("belt-dot");
+  function upd(){
+    var h=document.documentElement,max=h.scrollHeight-h.clientHeight,
+        p=max>0?h.scrollTop/max:0;
+    fill.style.height=(p*100)+"%";
+    dot.style.top="calc("+(p*100)+"% - 5px)";
+  }
+  addEventListener("scroll",upd,{passive:true});addEventListener("resize",upd);upd();
+})();
+
+/* Reveal on scroll */
+(function(){
+  if(!("IntersectionObserver" in window)){
+    document.querySelectorAll(".reveal").forEach(function(el){el.classList.add("visible")});
+    return;
+  }
+  var io=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){e.target.classList.add("visible");io.unobserve(e.target)}
+    });
+  },{threshold:.12});
+  document.querySelectorAll(".reveal").forEach(function(el){io.observe(el)});
+})();
+
+/* Station tabs (vanilla, accessible) */
+document.querySelectorAll("[data-station]").forEach(function(station){
+  var btns=station.querySelectorAll(".tab-btn"),
+      panels=station.querySelectorAll(".tab-panel");
+  btns.forEach(function(btn,i){
+    btn.addEventListener("click",function(){
+      btns.forEach(function(b,j){
+        b.setAttribute("aria-selected",i===j?"true":"false");
+        panels[j].classList.toggle("active",i===j);
+      });
+    });
+  });
+});
+</script>
+</body>
+</html>
