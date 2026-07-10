@@ -127,9 +127,47 @@ section{padding:clamp(4rem,9vw,8rem) 0;position:relative}
 .card p{color:var(--muted);font-size:.9rem;flex:1}
 .card a{margin-top:1rem;font-size:.88rem;font-family:var(--mono)}
 
+/* ─── Workflow diagram ───────────────────────────────────────────────── */
+.flow-box{border:1px solid var(--line);border-radius:16px;background:var(--panel);padding:1.6rem;margin-top:2.4rem;overflow-x:auto}
+.flow-box svg{display:block;min-width:760px;width:100%;height:auto}
+.flow-legend{display:flex;gap:1.4rem;flex-wrap:wrap;margin-top:1rem;font-family:var(--mono);font-size:.7rem;color:var(--muted)}
+.flow-legend span::before{content:"■ ";font-size:.9rem}
+.flow-legend .l-ai::before{color:var(--accent)}
+.flow-legend .l-h::before{color:var(--good)}
+.flow-legend .l-r::before{color:var(--warn)}
+
+/* ─── Station accent colors ──────────────────────────────────────────── */
+.station[data-c="1"] .station-num{color:#3b9eff}.station[data-c="2"] .station-num{color:#a78bfa}
+.station[data-c="3"] .station-num{color:#22d3ee}.station[data-c="4"] .station-num{color:#fbbf24}
+.station[data-c="5"] .station-num{color:#f472b6}.station[data-c="6"] .station-num{color:#3ddc97}
+.station[data-c="7"] .station-num{color:#fb7185}
+.station .st-icon{width:42px;height:42px;flex:0 0 42px}
+
+/* ─── Gallery / album ────────────────────────────────────────────────── */
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:1.2rem;margin-top:2.4rem}
+.shot{border:1px solid var(--line);border-radius:14px;background:var(--panel);overflow:hidden;cursor:zoom-in;transition:transform .2s ease,border-color .2s ease;margin:0}
+.shot:hover{transform:translateY(-4px);border-color:var(--accent)}
+.shot img{display:block;width:100%;height:170px;object-fit:cover;object-position:top;background:#0b0e13}
+.shot figcaption{padding:.85rem 1rem}
+.shot figcaption b{display:block;font-size:.9rem}
+.shot figcaption span{color:var(--muted);font-size:.78rem}
+#lightbox{position:fixed;inset:0;background:rgba(4,6,10,.94);display:none;z-index:50;align-items:center;justify-content:center;flex-direction:column;padding:2rem;cursor:zoom-out}
+#lightbox.open{display:flex}
+#lightbox img{max-width:min(1200px,94vw);max-height:82vh;border-radius:10px;border:1px solid var(--line)}
+#lightbox p{margin-top:1rem;color:var(--muted);font-size:.9rem}
+#lightbox .lb-close{position:absolute;top:1.2rem;right:1.6rem;background:none;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:.4rem .8rem;cursor:pointer;font-family:var(--mono)}
+
+/* ─── Contact ────────────────────────────────────────────────────────── */
+.contact-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1.3rem;margin-top:2.4rem}
+.contact-card{border:1px solid var(--line);border-radius:16px;padding:1.8rem;background:var(--panel);text-align:center;transition:border-color .2s ease}
+.contact-card:hover{border-color:var(--accent)}
+.contact-card .ci{font-size:1.9rem;display:block;margin-bottom:.7rem}
+.contact-card a{font-family:var(--mono);font-size:.88rem;word-break:break-all}
+
 /* ─── Footer ─────────────────────────────────────────────────────────── */
-footer{border-top:1px solid var(--line);padding:3rem 0;color:var(--dim);font-size:.88rem}
-footer .wrap{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+footer{border-top:1px solid var(--line);padding:3rem 0 2.2rem;color:var(--dim);font-size:.88rem}
+footer .frow{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.disclaimer{margin-top:1.8rem;padding-top:1.4rem;border-top:1px dashed var(--line);font-size:.76rem;color:var(--dim);line-height:1.7;max-width:none}
 </style>
 </head>
 <body>
@@ -197,6 +235,87 @@ footer .wrap{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
   </div>
 </section>
 
+<!-- ═══ 2.5 WORKFLOW DIAGRAM ══════════════════════════════════════════ -->
+<section id="workflow">
+  <div class="wrap">
+    <p class="kicker reveal">The blueprint</p>
+    <h2 class="reveal">How a raw idea becomes a running product</h2>
+    <p class="lead reveal">Blue machines make. Green gates decide. The orange loop repairs itself.</p>
+    <div class="flow-box reveal">
+      <svg viewBox="0 0 1000 265" xmlns="http://www.w3.org/2000/svg" role="img"
+           aria-label="Workflow: requirement to PRD to SRS to architecture to tasks to code to CI QA to deploy, each with a human gate; CI failure loops back to code via auto-repair">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0L10 5L0 10z" fill="#5c6675"/>
+          </marker>
+          <marker id="arR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0L10 5L0 10z" fill="#ffb454"/>
+          </marker>
+        </defs>
+        <!-- stage nodes -->
+        <g font-family="ui-monospace,Menlo,Consolas,monospace" font-size="12.5" text-anchor="middle">
+          <rect x="8"   y="70" width="108" height="44" rx="10" fill="rgba(59,158,255,.13)" stroke="#3b9eff" stroke-width="1.5"/>
+          <text x="62"  y="97" fill="#9ccdff">REQUIREMENT</text>
+          <rect x="136" y="70" width="88"  height="44" rx="10" fill="rgba(167,139,250,.13)" stroke="#a78bfa" stroke-width="1.5"/>
+          <text x="180" y="97" fill="#c4b5fd">PRD</text>
+          <rect x="244" y="70" width="88"  height="44" rx="10" fill="rgba(34,211,238,.12)" stroke="#22d3ee" stroke-width="1.5"/>
+          <text x="288" y="97" fill="#67e8f9">SRS</text>
+          <rect x="352" y="70" width="128" height="44" rx="10" fill="rgba(251,191,36,.12)" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="416" y="97" fill="#fcd34d">ARCHITECTURE</text>
+          <rect x="500" y="70" width="92"  height="44" rx="10" fill="rgba(244,114,182,.12)" stroke="#f472b6" stroke-width="1.5"/>
+          <text x="546" y="97" fill="#f9a8d4">TASKS</text>
+          <rect x="612" y="70" width="88"  height="44" rx="10" fill="rgba(61,220,151,.12)" stroke="#3ddc97" stroke-width="1.5"/>
+          <text x="656" y="97" fill="#6ee7b7">CODE</text>
+          <rect x="720" y="70" width="92"  height="44" rx="10" fill="rgba(255,180,84,.13)" stroke="#ffb454" stroke-width="1.5"/>
+          <text x="766" y="97" fill="#fed7aa">CI / QA</text>
+          <rect x="832" y="70" width="100" height="44" rx="10" fill="rgba(61,220,151,.18)" stroke="#3ddc97" stroke-width="2"/>
+          <text x="882" y="97" fill="#a7f3d0">DEPLOY ✓</text>
+        </g>
+        <!-- flow arrows -->
+        <g stroke="#5c6675" stroke-width="1.6" marker-end="url(#ar)">
+          <line x1="116" y1="92" x2="132" y2="92"/><line x1="224" y1="92" x2="240" y2="92"/>
+          <line x1="332" y1="92" x2="348" y2="92"/><line x1="480" y1="92" x2="496" y2="92"/>
+          <line x1="592" y1="92" x2="608" y2="92"/><line x1="700" y1="92" x2="716" y2="92"/>
+          <line x1="812" y1="92" x2="828" y2="92"/>
+        </g>
+        <!-- auto-repair loop: CI/QA back to CODE -->
+        <path d="M766 62 C766 26, 656 26, 656 60" fill="none" stroke="#ffb454" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arR)"/>
+        <text x="711" y="20" fill="#ffb454" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="11" text-anchor="middle">auto-repair on failure</text>
+        <!-- human gates -->
+        <g font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" text-anchor="middle">
+          <g stroke="#3ddc97" stroke-width="1.3" fill="rgba(61,220,151,.1)">
+            <path d="M62 138 l13 13 -13 13 -13 -13z"/><path d="M180 138 l13 13 -13 13 -13 -13z"/>
+            <path d="M288 138 l13 13 -13 13 -13 -13z"/><path d="M416 138 l13 13 -13 13 -13 -13z"/>
+            <path d="M546 138 l13 13 -13 13 -13 -13z"/><path d="M766 138 l13 13 -13 13 -13 -13z"/>
+            <path d="M882 138 l13 13 -13 13 -13 -13z"/>
+          </g>
+          <g stroke="#5c6675" stroke-width="1" stroke-dasharray="2 3">
+            <line x1="62" y1="118" x2="62" y2="134"/><line x1="180" y1="118" x2="180" y2="134"/>
+            <line x1="288" y1="118" x2="288" y2="134"/><line x1="416" y1="118" x2="416" y2="134"/>
+            <line x1="546" y1="118" x2="546" y2="134"/><line x1="766" y1="118" x2="766" y2="134"/>
+            <line x1="882" y1="118" x2="882" y2="134"/>
+          </g>
+          <g fill="#3ddc97">
+            <text x="62" y="185">BUSINESS</text><text x="62" y="198">ANALYST</text>
+            <text x="180" y="185">PRODUCT</text><text x="180" y="198">MANAGER</text>
+            <text x="288" y="185">SYSTEMS</text><text x="288" y="198">ANALYST</text>
+            <text x="416" y="185">SOFTWARE</text><text x="416" y="198">ARCHITECT</text>
+            <text x="546" y="185">TECH</text><text x="546" y="198">LEAD</text>
+            <text x="766" y="185">QA +</text><text x="766" y="198">OWNER</text>
+            <text x="882" y="185">STUDIO</text><text x="882" y="198">OWNER</text>
+          </g>
+          <text x="500" y="235" fill="#8a94a6" font-size="11">◆ = human gate — nothing passes a station without its expert's finalize</text>
+        </g>
+      </svg>
+      <div class="flow-legend">
+        <span class="l-ai">AI production stage</span>
+        <span class="l-h">Human decision gate</span>
+        <span class="l-r">Self-repair loop</span>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ═══ 3. ASSEMBLY LINE ══════════════════════════════════════════════ -->
 <section id="line">
   <div class="wrap">
@@ -206,7 +325,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
     and exactly which buttons carry the human's authority.</p>
 
     <!-- Station 1 -->
-    <article class="station reveal" data-station>
+    <article class="station reveal" data-station data-c="1">
       <div class="station-head">
         <span class="station-num">01</span>
         <div><small>Station · Intake</small><h3>Requirements Lab</h3></div>
@@ -237,7 +356,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
     </article>
 
     <!-- Station 2 -->
-    <article class="station reveal" data-station>
+    <article class="station reveal" data-station data-c="2">
       <div class="station-head">
         <span class="station-num">02</span>
         <div><small>Station · Product definition</small><h3>PRD Bay</h3></div>
@@ -268,7 +387,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
     </article>
 
     <!-- Station 3 -->
-    <article class="station reveal" data-station>
+    <article class="station reveal" data-station data-c="3">
       <div class="station-head">
         <span class="station-num">03</span>
         <div><small>Station · Engineering spec</small><h3>SRS Bay</h3></div>
@@ -299,7 +418,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
     </article>
 
     <!-- Station 4 -->
-    <article class="station reveal" data-station>
+    <article class="station reveal" data-station data-c="4">
       <div class="station-head">
         <span class="station-num">04</span>
         <div><small>Station · The deepest human station</small><h3>Architecture Studio</h3></div>
@@ -333,7 +452,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
     </article>
 
     <!-- Station 5 -->
-    <article class="station reveal" data-station>
+    <article class="station reveal" data-station data-c="5">
       <div class="station-head">
         <span class="station-num">05</span>
         <div><small>Station · Work breakdown</small><h3>Kanban Planning Floor</h3></div>
@@ -364,7 +483,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
     </article>
 
     <!-- Station 6 -->
-    <article class="station reveal" data-station>
+    <article class="station reveal" data-station data-c="6">
       <div class="station-head">
         <span class="station-num">06</span>
         <div><small>Station · Production line</small><h3>Build Factory</h3></div>
@@ -403,7 +522,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
     </article>
 
     <!-- Station 7 -->
-    <article class="station reveal" data-station>
+    <article class="station reveal" data-station data-c="7">
       <div class="station-head">
         <span class="station-num">07</span>
         <div><small>Station · Final inspection</small><h3>Traceability Control Room</h3></div>
@@ -485,6 +604,34 @@ $ pm-studio status
   </div>
 </section>
 
+<!-- ═══ 5.5 SCREEN ALBUM ══════════════════════════════════════════════ -->
+<section id="album">
+  <div class="wrap">
+    <p class="kicker reveal">Inside the factory</p>
+    <h2 class="reveal">Every screen, as it really looks</h2>
+    <p class="lead reveal">Real screenshots from the live system — click any to enlarge.</p>
+    <div class="gallery">
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/1.Deshboard.png" alt="PM Studio dashboard"><figcaption><b>Dashboard — Control centre</b><span>Live jobs, pipeline health, AI usage at a glance</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/2.Clints.png" alt="Clients screen"><figcaption><b>Clients</b><span>Every project starts with a client record</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/3.Project.png" alt="Projects screen"><figcaption><b>Projects</b><span>One factory line per project</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/4.Requirements.png" alt="Requirements Lab screen"><figcaption><b>Station 01 · Requirements Lab</b><span>AI analysis, gap questions, Business Analyst finalize</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/5.PRD.png" alt="PRD screen"><figcaption><b>Station 02 · PRD Bay</b><span>Generated product document, PM feedback loop</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/6.SRS.png" alt="SRS screen"><figcaption><b>Station 03 · SRS Bay</b><span>IEEE-830 spec with numbered, testable FRs</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/7.Architecture%20Suit.png" alt="Architecture suite screen"><figcaption><b>Station 04 · Architecture Studio</b><span>Six linked docs — the architect edits and signs off</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/8.Task_Kanbanboard.png" alt="Kanban board screen"><figcaption><b>Station 05 · Kanban Planning Floor</b><span>Dependency-ordered tasks with developer specs</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/9.Build.png" alt="Build screen"><figcaption><b>Station 06 · Build Factory</b><span>Scaffold → generate → CI/QA → deploy, honest progress</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/10.CODE%20gen.png" alt="Live code generation screen"><figcaption><b>Live code generation</b><span>File-by-file output with real step counters</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/8.5.traceability.png" alt="Traceability screen"><figcaption><b>Station 07 · Traceability Control Room</b><span>Requirement → FR → task → code, gap resolution</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/11.user%20Management%20.png" alt="User management screen"><figcaption><b>User management</b><span>Named roles — analyst, architect, lead, owner</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/12.screen%20Permission%20managements%20.png" alt="Permissions screen"><figcaption><b>Screen permissions</b><span>Who may view, edit, and finalize each station</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/13.0_Ai%20config__1.png" alt="AI config screen 1"><figcaption><b>AI config — cost tiers</b><span>Free chain, low-cost, premium Claude override</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/13.1_ai%20config2.png" alt="AI config screen 2"><figcaption><b>AI config — provider keys</b><span>21 models across independent free-quota pools</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/13.2_aiconfig3.png" alt="AI config screen 3"><figcaption><b>AI config — routing &amp; usage</b><span>Per-screen model overrides, daily usage meters</span></figcaption></figure>
+      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/13.Ai%20config__3.png" alt="AI config screen 4"><figcaption><b>AI config — deploy target</b><span>VPS deploy: per-project folders, auto ports</span></figcaption></figure>
+    </div>
+  </div>
+</section>
+
 <!-- ═══ 6. SHOWCASE ═══════════════════════════════════════════════════ -->
 <section id="showcase">
   <div class="wrap">
@@ -520,13 +667,61 @@ $ pm-studio status
   </div>
 </section>
 
+<!-- ═══ 6.5 CONTACT ═══════════════════════════════════════════════════ -->
+<section id="contact">
+  <div class="wrap">
+    <p class="kicker reveal">Talk to the factory</p>
+    <h2 class="reveal">Bring us a raw idea</h2>
+    <p class="lead reveal">A one-page brief is enough to start the line.</p>
+    <div class="contact-grid">
+      <div class="contact-card reveal">
+        <span class="ci">✉️</span>
+        <h3>Email</h3>
+        <a href="mailto:sabyasachee.ds@gmail.com">sabyasachee.ds@gmail.com</a>
+      </div>
+      <div class="contact-card reveal">
+        <span class="ci">⌥</span>
+        <h3>GitHub</h3>
+        <a href="https://github.com/SabyaSachee-AI" rel="noopener">github.com/SabyaSachee-AI</a>
+      </div>
+      <div class="contact-card reveal">
+        <span class="ci">🌐</span>
+        <h3>Project hub</h3>
+        <a href="http://185.185.80.147:8080/" rel="noopener">সব্যসাচী ।I SABYASACHEE — main site</a>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- ═══ 7. FOOTER ═════════════════════════════════════════════════════ -->
 <footer>
   <div class="wrap">
-    <span>Built by <strong style="color:var(--text)">সব্যসাচী ।I SABYASACHEE</strong> · PM Studio runs on its own VPS</span>
-    <a href="https://github.com/SabyaSachee-AI" rel="noopener">github.com/SabyaSachee-AI</a>
+    <div class="frow">
+      <span>© 2026 PM Studio — built by <strong style="color:var(--text)">সব্যসাচী ।I SABYASACHEE</strong> · runs on its own VPS</span>
+      <span>
+        <a href="mailto:sabyasachee.ds@gmail.com">sabyasachee.ds@gmail.com</a>
+        &nbsp;·&nbsp;
+        <a href="https://github.com/SabyaSachee-AI" rel="noopener">github.com/SabyaSachee-AI</a>
+      </span>
+    </div>
+    <p class="disclaimer">
+      <strong>Disclaimer:</strong> PM Studio is an internal production system of
+      সব্যসাচী ।I SABYASACHEE, a software development company. All screenshots on this
+      page are taken from the live system and may differ slightly from the current
+      version as the factory evolves. Product names, client data, and generated
+      artifacts shown are illustrative. AI-generated output is always reviewed,
+      edited, and finalized by a qualified human expert before delivery — no artifact
+      ships on the machine's word alone. Linked demo applications (including VNT) are
+      provided for evaluation only and may be reset or updated without notice.
+    </p>
   </div>
 </footer>
+
+<div id="lightbox" role="dialog" aria-modal="true" aria-label="Enlarged screenshot">
+  <button class="lb-close" type="button">Esc ✕</button>
+  <img src="" alt="">
+  <p></p>
+</div>
 
 <script>
 /* Conveyor belt scroll progress */
@@ -553,6 +748,27 @@ $ pm-studio status
     });
   },{threshold:.12});
   document.querySelectorAll(".reveal").forEach(function(el){io.observe(el)});
+})();
+
+/* Screenshot album lightbox */
+(function(){
+  var lb=document.getElementById("lightbox"),img=lb.querySelector("img"),
+      cap=lb.querySelector("p"),close=lb.querySelector(".lb-close");
+  function open(fig){
+    var i=fig.querySelector("img"),c=fig.querySelector("figcaption");
+    img.src=i.src;img.alt=i.alt;
+    cap.textContent=c?c.textContent:"";
+    lb.classList.add("open");document.body.style.overflow="hidden";
+  }
+  function shut(){lb.classList.remove("open");document.body.style.overflow="";img.src=""}
+  document.querySelectorAll(".shot").forEach(function(fig){
+    fig.addEventListener("click",function(){open(fig)});
+    fig.setAttribute("tabindex","0");
+    fig.addEventListener("keydown",function(e){if(e.key==="Enter"||e.key===" "){e.preventDefault();open(fig)}});
+  });
+  lb.addEventListener("click",function(e){if(e.target!==img)shut()});
+  close.addEventListener("click",shut);
+  addEventListener("keydown",function(e){if(e.key==="Escape")shut()});
 })();
 
 /* Station tabs (vanilla, accessible) */
