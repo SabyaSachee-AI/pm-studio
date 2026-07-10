@@ -164,6 +164,31 @@ section{padding:clamp(4rem,9vw,8rem) 0;position:relative}
 .contact-card .ci{font-size:1.9rem;display:block;margin-bottom:.7rem}
 .contact-card a{font-family:var(--mono);font-size:.88rem;word-break:break-all}
 
+/* ─── Brand lockup ───────────────────────────────────────────────────── */
+.brand{display:flex;align-items:center;gap:clamp(.9rem,2.5vw,1.5rem);margin-top:1.4rem}
+.brand-logo{width:clamp(64px,10vw,104px);height:auto;flex:0 0 auto;filter:drop-shadow(0 0 14px rgba(59,158,255,.35))}
+.brand-bn{display:block;font-size:clamp(2.6rem,8vw,4.8rem);font-weight:800;line-height:1.02;letter-spacing:-.01em;
+  background:linear-gradient(92deg,#22d3ee,#3b9eff 45%,#a78bfa);-webkit-background-clip:text;background-clip:text;color:transparent}
+.brand-en{display:block;letter-spacing:.42em;font-weight:700;font-size:clamp(.78rem,2vw,1.05rem);color:var(--text);margin-top:.25rem}
+.brand-tag{display:block;letter-spacing:.48em;font-size:clamp(.58rem,1.3vw,.72rem);color:var(--muted);margin-top:.6rem;text-transform:uppercase}
+
+/* ─── Screen slider ──────────────────────────────────────────────────── */
+.slider{margin-top:2.4rem;border:1px solid var(--line);border-radius:16px;background:var(--panel);overflow:hidden}
+.sl-stage{position:relative;background:#0b0e13}
+.sl-stage img{display:block;width:100%;max-height:64vh;object-fit:contain;cursor:zoom-in}
+.sl-nav{position:absolute;top:50%;transform:translateY(-50%);background:rgba(10,12,16,.78);border:1px solid var(--line);
+  color:var(--text);font-size:1.7rem;line-height:1;padding:.45rem .8rem;border-radius:10px;cursor:pointer;z-index:2}
+.sl-nav:hover{border-color:var(--accent)}
+.sl-nav.prev{left:.8rem}.sl-nav.next{right:.8rem}
+.sl-cap{padding:1.1rem 1.4rem;border-top:1px solid var(--line)}
+.sl-cap b{font-size:1.02rem}
+.sl-count{float:right;font-family:var(--mono);color:var(--dim);font-size:.8rem}
+.sl-cap p{color:var(--muted);font-size:.9rem;margin-top:.3rem;max-width:none}
+.thumbs{display:flex;gap:.5rem;padding:.9rem 1.2rem;overflow-x:auto;border-top:1px solid var(--line);background:var(--bg2)}
+.thumbs button{flex:0 0 auto;width:86px;height:52px;border-radius:8px;border:2px solid transparent;padding:0;overflow:hidden;cursor:pointer;background:none;opacity:.5;transition:opacity .15s}
+.thumbs button.on,.thumbs button:hover{border-color:var(--accent);opacity:1}
+.thumbs img{width:100%;height:100%;object-fit:cover;object-position:top;display:block}
+
 /* ─── Footer ─────────────────────────────────────────────────────────── */
 footer{border-top:1px solid var(--line);padding:3rem 0 2.2rem;color:var(--dim);font-size:.88rem}
 footer .frow{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
@@ -178,7 +203,27 @@ footer .frow{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
 <section id="hero">
   <div class="wrap">
     <p class="kicker">PM Studio · An operational AI software factory</p>
-    <h1>The Software Factory<br>of <span class="glow">সব্যসাচী ।I SABYASACHEE</span></h1>
+    <h1>The Software Factory of</h1>
+    <div class="brand">
+      <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+        <defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#22d3ee"/><stop offset=".55" stop-color="#3b9eff"/><stop offset="1" stop-color="#a78bfa"/>
+        </linearGradient></defs>
+        <circle cx="50" cy="50" r="34" fill="none" stroke="url(#lg)" stroke-width="2" opacity=".85"/>
+        <g fill="url(#lg)">
+          <circle cx="50" cy="16" r="4"/><circle cx="16" cy="50" r="4"/><circle cx="50" cy="84" r="4"/>
+          <circle cx="84" cy="50" r="4"/><circle cx="26" cy="26" r="3"/><circle cx="26" cy="74" r="3"/><circle cx="74" cy="74" r="3"/>
+        </g>
+        <circle cx="76" cy="22" r="5" fill="#3ddc97"/>
+        <path d="M50 33v15" stroke="url(#lg)" stroke-width="6" stroke-linecap="round"/>
+        <path d="M39 42a16.5 16.5 0 1 0 22 0" fill="none" stroke="url(#lg)" stroke-width="6" stroke-linecap="round"/>
+      </svg>
+      <div class="brand-text">
+        <span class="brand-bn">সব্যসাচী</span>
+        <span class="brand-en">SABYASACHEE</span>
+        <span class="brand-tag">The Next Evolution</span>
+      </div>
+    </div>
     <p class="lead">Raw client requirements enter. Deployed production applications exit.
     AI generates every artifact on the line — a human expert evaluates, edits, and
     finalizes at every station. Nothing ships on the machine's word alone.</p>
@@ -286,13 +331,13 @@ footer .frow{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
           <g stroke="#3ddc97" stroke-width="1.3" fill="rgba(61,220,151,.1)">
             <path d="M62 138 l13 13 -13 13 -13 -13z"/><path d="M180 138 l13 13 -13 13 -13 -13z"/>
             <path d="M288 138 l13 13 -13 13 -13 -13z"/><path d="M416 138 l13 13 -13 13 -13 -13z"/>
-            <path d="M546 138 l13 13 -13 13 -13 -13z"/><path d="M766 138 l13 13 -13 13 -13 -13z"/>
+            <path d="M546 138 l13 13 -13 13 -13 -13z"/><path d="M656 138 l13 13 -13 13 -13 -13z"/><path d="M766 138 l13 13 -13 13 -13 -13z"/>
             <path d="M882 138 l13 13 -13 13 -13 -13z"/>
           </g>
           <g stroke="#5c6675" stroke-width="1" stroke-dasharray="2 3">
             <line x1="62" y1="118" x2="62" y2="134"/><line x1="180" y1="118" x2="180" y2="134"/>
             <line x1="288" y1="118" x2="288" y2="134"/><line x1="416" y1="118" x2="416" y2="134"/>
-            <line x1="546" y1="118" x2="546" y2="134"/><line x1="766" y1="118" x2="766" y2="134"/>
+            <line x1="546" y1="118" x2="546" y2="134"/><line x1="656" y1="118" x2="656" y2="134"/><line x1="766" y1="118" x2="766" y2="134"/>
             <line x1="882" y1="118" x2="882" y2="134"/>
           </g>
           <g fill="#3ddc97">
@@ -301,8 +346,9 @@ footer .frow{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
             <text x="288" y="185">SYSTEMS</text><text x="288" y="198">ANALYST</text>
             <text x="416" y="185">SOFTWARE</text><text x="416" y="198">ARCHITECT</text>
             <text x="546" y="185">TECH</text><text x="546" y="198">LEAD</text>
-            <text x="766" y="185">QA +</text><text x="766" y="198">OWNER</text>
-            <text x="882" y="185">STUDIO</text><text x="882" y="198">OWNER</text>
+            <text x="656" y="191">DEVELOPER</text>
+            <text x="766" y="185">TEAM</text><text x="766" y="198">LEAD</text>
+            <text x="882" y="191">DEVOPS</text>
           </g>
           <text x="500" y="235" fill="#8a94a6" font-size="11">◆ = human gate — nothing passes a station without its expert's finalize</text>
         </g>
@@ -482,13 +528,46 @@ footer .frow{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
       </div>
     </article>
 
-    <!-- Station 6 -->
+    <!-- Station 6 — Traceability (the gate before Build) -->
     <article class="station reveal" data-station data-c="6">
       <div class="station-head">
         <span class="station-num">06</span>
-        <div><small>Station · Production line</small><h3>Build Factory</h3></div>
+        <div><small>Station · Final inspection — the gate before Build</small><h3>Traceability Control Room</h3></div>
       </div>
       <div class="tabs" role="tablist" aria-label="Station 6 layers">
+        <button class="tab-btn" role="tab" aria-selected="true">① AI produces</button>
+        <button class="tab-btn" role="tab" aria-selected="false">② Human judges</button>
+        <button class="tab-btn" role="tab" aria-selected="false">③ The buttons</button>
+      </div>
+      <div class="tab-panel active" role="tabpanel">
+        <p>The AI cross-checks the whole chain — requirement → FR → task → code — and
+        lists every gap before a single line of code is generated: unanswered questions,
+        features without FRs, FRs without tasks, orphaned tasks, plan drift. It can resolve all of them <em>append-only</em>:
+        source documents are amended with a changelog, never overwritten.</p>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <span class="role-tag">Team Lead</span>
+        <p>The last inspection before the Build Factory is allowed to start.</p>
+        <div class="think">"Can I trace every planned feature back to a client need —
+        and every client need forward to a task on the board? If not, the gate to
+        Build stays shut."</div>
+      </div>
+      <div class="tab-panel" role="tabpanel">
+        <table class="btn-table">
+          <tr><td><span class="btn-chip">Numbered gap rows</span></td><td>Seven ordered checks, each with a one-click fix.</td></tr>
+          <tr><td><span class="btn-chip">Resolve all gaps</span></td><td>Runs the fixes in dependency order, live progress, confirmation at the end.</td></tr>
+          <tr><td><span class="btn-chip green">Go to Build</span></td><td>Appears only at 100% coverage — the gate literally does not exist until the chain is whole.</td></tr>
+        </table>
+      </div>
+    </article>
+
+    <!-- Station 7 — Build Factory -->
+    <article class="station reveal" data-station data-c="7">
+      <div class="station-head">
+        <span class="station-num">07</span>
+        <div><small>Station · Production line</small><h3>Build Factory</h3></div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Station 7 layers">
         <button class="tab-btn" role="tab" aria-selected="true">① AI produces</button>
         <button class="tab-btn" role="tab" aria-selected="false">② Human judges</button>
         <button class="tab-btn" role="tab" aria-selected="false">③ The buttons</button>
@@ -503,10 +582,14 @@ footer .frow{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
         until green or a human is called.</p>
       </div>
       <div class="tab-panel" role="tabpanel">
-        <span class="role-tag">QA + Studio Owner</span>
-        <p>The machine writes the code; the human refuses to trust it until it proves itself twice.</p>
-        <div class="think">"Does CI pass? Fine. Now — does it run on <em>my</em> machine,
-        clicked by <em>my</em> hands? Only then does it earn a deploy."</div>
+        <span class="role-tag">Developer · Team Lead · DevOps</span>
+        <p>Three experts share this station: the <strong>Developer</strong> reviews and
+        regenerates the machine's code; the <strong>Team Lead</strong> orchestrates the
+        line and proves the build on a local machine; <strong>DevOps</strong> carries it
+        to the server.</p>
+        <div class="think">"Developer: is this code I would sign? Team Lead: does it run
+        on <em>my</em> machine, clicked by <em>my</em> hands? DevOps: will it survive the
+        server? Only then does it ship."</div>
       </div>
       <div class="tab-panel" role="tabpanel">
         <table class="btn-table">
@@ -514,41 +597,9 @@ footer .frow{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
           <tr><td><span class="btn-chip">Generate code</span></td><td>Task-by-task codebase generation — resumable, honest progress.</td></tr>
           <tr><td><span class="btn-chip">Polish / Tests</span></td><td>Optional quality passes: production-grade rewrite + test suite.</td></tr>
           <tr><td><span class="btn-chip">Push to GitHub</span></td><td>Code only — leaves a window to clone and test locally first.</td></tr>
-          <tr><td><span class="btn-chip">Run CI / QA</span></td><td>The human starts the quality gate deliberately, never by accident.</td></tr>
+          <tr><td><span class="btn-chip">Run CI / QA</span></td><td>The Team Lead starts the quality gate deliberately, never by accident.</td></tr>
           <tr><td><span class="btn-chip red">Cancel</span></td><td>Truly stops the server-side job — not just the screen.</td></tr>
-          <tr><td><span class="btn-chip green">Deploy to VPS</span></td><td>Each project gets its own folder and its own auto-assigned port. Health-checked, auto-rollback.</td></tr>
-        </table>
-      </div>
-    </article>
-
-    <!-- Station 7 -->
-    <article class="station reveal" data-station data-c="7">
-      <div class="station-head">
-        <span class="station-num">07</span>
-        <div><small>Station · Final inspection</small><h3>Traceability Control Room</h3></div>
-      </div>
-      <div class="tabs" role="tablist" aria-label="Station 7 layers">
-        <button class="tab-btn" role="tab" aria-selected="true">① AI produces</button>
-        <button class="tab-btn" role="tab" aria-selected="false">② Human judges</button>
-        <button class="tab-btn" role="tab" aria-selected="false">③ The buttons</button>
-      </div>
-      <div class="tab-panel active" role="tabpanel">
-        <p>The AI cross-checks the whole chain — requirement → FR → task → code — and
-        lists every gap: unanswered questions, features without FRs, FRs without tasks,
-        orphaned tasks, plan drift. It can resolve all of them <em>append-only</em>:
-        source documents are amended with a changelog, never overwritten.</p>
-      </div>
-      <div class="tab-panel" role="tabpanel">
-        <span class="role-tag">Studio Owner</span>
-        <p>The last set of eyes before the factory certifies the product.</p>
-        <div class="think">"Can I trace every shipped feature back to a client need —
-        and every client need forward to shipped code? If not, the gate stays shut."</div>
-      </div>
-      <div class="tab-panel" role="tabpanel">
-        <table class="btn-table">
-          <tr><td><span class="btn-chip">Numbered gap rows</span></td><td>Seven ordered checks, each with a one-click fix.</td></tr>
-          <tr><td><span class="btn-chip">Resolve all gaps</span></td><td>Runs the fixes in dependency order, live progress, confirmation at the end.</td></tr>
-          <tr><td><span class="btn-chip green">Go to Build</span></td><td>Appears only at 100% coverage — the gate literally does not exist until the chain is whole.</td></tr>
+          <tr><td><span class="btn-chip green">Deploy to VPS</span></td><td>DevOps' button — each project gets its own folder and its own auto-assigned port. Health-checked, auto-rollback.</td></tr>
         </table>
       </div>
     </article>
@@ -566,20 +617,20 @@ footer .frow{display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
         <p>The সব্যসাচী ।I SABYASACHEE team uploads the raw requirement document. The AI reads it and raises 12 clarifying questions with suggested answers.</p>
         <p class="human-note">→ human: edits 4 of the 12 suggestions where the AI guessed the client's intent wrong.</p></div>
       <div class="tl-item reveal"><span class="tl-time">09:20</span><h3>Requirement finalized</h3>
-        <p>As Business Analyst, he presses <strong>Confirm &amp; Finalize</strong>. The source of truth is locked.</p></div>
+        <p>The Business Analyst presses <strong>Confirm &amp; Finalize</strong>. The source of truth is locked.</p></div>
       <div class="tl-item reveal"><span class="tl-time">09:40</span><h3>PRD approved</h3>
         <p>The generated PRD promises a feature the budget can't carry. One feedback line, one regenerate — scope is honest now. Finalized.</p></div>
       <div class="tl-item reveal"><span class="tl-time">10:30</span><h3>Architecture inspected</h3>
-        <p>Wearing the Architect's hat: the ERD misses an index the API design clearly needs. He edits it inline, regenerates only the deploy doc, and signs off.</p>
+        <p>The Software Architect finds the ERD missing an index the API design clearly needs — edits it inline, regenerates only the deploy doc, and signs off.</p>
         <p class="human-note">→ human: this station is never rushed. The factory waits for the architect.</p></div>
       <div class="tl-item reveal"><span class="tl-time">11:00</span><h3>The line runs</h3>
-        <p>Tasks extracted, specs generated, Build started. The status bar reads "Step 12 of 40 · 28% done". He goes to lunch — generation is resumable and self-healing.</p></div>
+        <p>Traceability shows 7/7 checks passed — the gate opens. Tasks in order, Build started; the status bar reads "Step 12 of 40 · 28% done". Generation is resumable and self-healing.</p></div>
       <div class="tl-item reveal"><span class="tl-time">15:00</span><h3>Local proof</h3>
-        <p>Code pushed to GitHub. He clones it, runs it on his own machine, clicks through every screen. Two fixes committed locally, pushed back.</p></div>
+        <p>Code pushed to GitHub. The Team Lead clones it, runs it on a local machine and clicks through every screen; the Developer commits two fixes and pushes back.</p></div>
       <div class="tl-item reveal"><span class="tl-time">16:00</span><h3>The gate</h3>
-        <p><strong>Run CI/QA</strong> — deliberately, by hand. CI fails once; the auto-repair loop reads the logs, fixes, re-pushes. Green.</p></div>
+        <p>The Team Lead presses <strong>Run CI/QA</strong> — deliberately, by hand. CI fails once; the auto-repair loop reads the logs, fixes, re-pushes. Green.</p></div>
       <div class="tl-item reveal"><span class="tl-time">17:30</span><h3>Deployed</h3>
-        <p>Traceability shows 7/7 checks passed. <strong>Deploy to VPS</strong> — its own folder, its own port, health-checked. The client gets a URL, not a promise.</p></div>
+        <p>DevOps presses <strong>Deploy to VPS</strong> — its own folder, its own port, health-checked with auto-rollback. The client gets a URL, not a promise.</p></div>
     </div>
   </div>
 </section>
@@ -609,25 +660,15 @@ $ pm-studio status
   <div class="wrap">
     <p class="kicker reveal">Inside the factory</p>
     <h2 class="reveal">Every screen, as it really looks</h2>
-    <p class="lead reveal">Real screenshots from the live system — click any to enlarge.</p>
-    <div class="gallery">
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/1.Deshboard.png" alt="PM Studio dashboard"><figcaption><b>Dashboard — Control centre</b><span>Live jobs, pipeline health, AI usage at a glance</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/2.Clints.png" alt="Clients screen"><figcaption><b>Clients</b><span>Every project starts with a client record</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/3.Project.png" alt="Projects screen"><figcaption><b>Projects</b><span>One factory line per project</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/4.Requirements.png" alt="Requirements Lab screen"><figcaption><b>Station 01 · Requirements Lab</b><span>AI analysis, gap questions, Business Analyst finalize</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/5.PRD.png" alt="PRD screen"><figcaption><b>Station 02 · PRD Bay</b><span>Generated product document, PM feedback loop</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/6.SRS.png" alt="SRS screen"><figcaption><b>Station 03 · SRS Bay</b><span>IEEE-830 spec with numbered, testable FRs</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/7.Architecture%20Suit.png" alt="Architecture suite screen"><figcaption><b>Station 04 · Architecture Studio</b><span>Six linked docs — the architect edits and signs off</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/8.Task_Kanbanboard.png" alt="Kanban board screen"><figcaption><b>Station 05 · Kanban Planning Floor</b><span>Dependency-ordered tasks with developer specs</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/9.Build.png" alt="Build screen"><figcaption><b>Station 06 · Build Factory</b><span>Scaffold → generate → CI/QA → deploy, honest progress</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/10.CODE%20gen.png" alt="Live code generation screen"><figcaption><b>Live code generation</b><span>File-by-file output with real step counters</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/8.5.traceability.png" alt="Traceability screen"><figcaption><b>Station 07 · Traceability Control Room</b><span>Requirement → FR → task → code, gap resolution</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/11.user%20Management%20.png" alt="User management screen"><figcaption><b>User management</b><span>Named roles — analyst, architect, lead, owner</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/12.screen%20Permission%20managements%20.png" alt="Permissions screen"><figcaption><b>Screen permissions</b><span>Who may view, edit, and finalize each station</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/13.0_Ai%20config__1.png" alt="AI config screen 1"><figcaption><b>AI config — cost tiers</b><span>Free chain, low-cost, premium Claude override</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/13.1_ai%20config2.png" alt="AI config screen 2"><figcaption><b>AI config — provider keys</b><span>21 models across independent free-quota pools</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/13.2_aiconfig3.png" alt="AI config screen 3"><figcaption><b>AI config — routing &amp; usage</b><span>Per-screen model overrides, daily usage meters</span></figcaption></figure>
-      <figure class="shot reveal"><img loading="lazy" src="All%20Screen%20PIC/13.Ai%20config__3.png" alt="AI config screen 4"><figcaption><b>AI config — deploy target</b><span>VPS deploy: per-project folders, auto ports</span></figcaption></figure>
+    <p class="lead reveal">Real screenshots from the live system — slide through, click to enlarge.</p>
+    <div class="slider reveal" id="screenSlider">
+      <div class="sl-stage">
+        <button class="sl-nav prev" type="button" aria-label="Previous screen">‹</button>
+        <img id="sl-img" src="" alt="">
+        <button class="sl-nav next" type="button" aria-label="Next screen">›</button>
+      </div>
+      <div class="sl-cap"><span class="sl-count" id="sl-count"></span><b id="sl-title"></b><p id="sl-desc"></p></div>
+      <div class="thumbs" id="sl-thumbs" role="tablist" aria-label="Screens"></div>
     </div>
   </div>
 </section>
@@ -750,25 +791,61 @@ $ pm-studio status
   document.querySelectorAll(".reveal").forEach(function(el){io.observe(el)});
 })();
 
-/* Screenshot album lightbox */
+/* Screen slider + lightbox */
 (function(){
-  var lb=document.getElementById("lightbox"),img=lb.querySelector("img"),
-      cap=lb.querySelector("p"),close=lb.querySelector(".lb-close");
-  function open(fig){
-    var i=fig.querySelector("img"),c=fig.querySelector("figcaption");
-    img.src=i.src;img.alt=i.alt;
-    cap.textContent=c?c.textContent:"";
-    lb.classList.add("open");document.body.style.overflow="hidden";
-  }
-  function shut(){lb.classList.remove("open");document.body.style.overflow="";img.src=""}
-  document.querySelectorAll(".shot").forEach(function(fig){
-    fig.addEventListener("click",function(){open(fig)});
-    fig.setAttribute("tabindex","0");
-    fig.addEventListener("keydown",function(e){if(e.key==="Enter"||e.key===" "){e.preventDefault();open(fig)}});
+  var S=[
+    {f:"1.Deshboard.png",t:"Dashboard — Control centre",d:"Live 'Running now' jobs with real progress bars, pipeline health, task statistics and AI usage meters — the whole factory on one screen."},
+    {f:"2.Clints.png",t:"Clients",d:"Every engagement begins with a client record; projects, documents and deploys all trace back to it."},
+    {f:"3.Project.png",t:"Projects",d:"One production line per project. Status follows the pipeline from raw requirement to deployed."},
+    {f:"4.Requirements.png",t:"Station 01 · Requirements Lab",d:"Upload a raw document; the AI extracts scope, flags gaps and asks clarifying questions with suggested answers. The Business Analyst edits the answers and presses Confirm & Finalize."},
+    {f:"5.PRD.png",t:"Station 02 · PRD Bay",d:"The generated Product Requirements Document. The Product Manager steers with plain-language feedback and regenerate, then finalizes the scope."},
+    {f:"6.SRS.png",t:"Station 03 · SRS Bay",d:"An IEEE-830 specification with numbered, individually testable FRs and NFRs. The Systems Analyst's finalize freezes the numbering for traceability."},
+    {f:"7.Architecture Suit.png",t:"Station 04 · Architecture Studio",d:"Six cross-linked documents: stack, ERD, APIs, folders, security, deploy. The Software Architect edits inline, regenerates single docs and signs off — nothing moves without it."},
+    {f:"8.Task_Kanbanboard.png",t:"Station 05 · Kanban Planning Floor",d:"Dependency-ordered developer tasks, each linked to its FR with a generated technical spec. The Team Lead reorders, splits and edits the plan."},
+    {f:"8.5.traceability.png",t:"Station 06 · Traceability Control Room",d:"The final inspection before Build: requirement → FR → task cross-checks with one-click, append-only gap fixes. 'Go to Build' appears only at 100% coverage."},
+    {f:"9.Build.png",t:"Station 07 · Build Factory",d:"The production line: Scaffold → Generate → Polish → Tests → Push → CI/QA → local test → Deploy. The Developer reviews the code, the Team Lead orchestrates and proves it locally, DevOps ships it."},
+    {f:"10.CODE gen.png",t:"Live code generation",d:"File-by-file generation with an honest 'Step n of total' counter, the active model of the 21-model chain — and a Cancel that truly stops the server job."},
+    {f:"11.user Management .png",t:"User management",d:"Named experts with real roles — analyst, architect, team lead, developer, devops — because every station needs an accountable human."},
+    {f:"12.screen Permission managements .png",t:"Screen permissions",d:"Per-screen rights: who may evaluate, who may edit, who may finalize each station."},
+    {f:"13.0_Ai config__1.png",t:"AI config — cost tiers",d:"Free 21-model chain, low-cost, or premium Claude override — switchable per screen."},
+    {f:"13.1_ai config2.png",t:"AI config — provider keys",d:"Provider keys across independent free-quota pools: when one provider rests, the next takes over automatically."},
+    {f:"13.2_aiconfig3.png",t:"AI config — routing & usage",d:"Per-screen model overrides, daily usage meters and live chain status: ready, cooling, or missing keys."},
+    {f:"13.Ai config__3.png",t:"AI config — VPS deploy target",d:"The deploy target: every project auto-deploys to its own folder on the VPS with its own auto-assigned port."}
+  ];
+  var i=0,img=document.getElementById("sl-img"),ttl=document.getElementById("sl-title"),
+      dsc=document.getElementById("sl-desc"),cnt=document.getElementById("sl-count"),
+      th=document.getElementById("sl-thumbs"),
+      lb=document.getElementById("lightbox"),lbi=lb.querySelector("img"),lbc=lb.querySelector("p");
+  function enc(f){return "All%20Screen%20PIC/"+encodeURIComponent(f)}
+  S.forEach(function(s,j){
+    var b=document.createElement("button");
+    b.type="button";b.setAttribute("role","tab");b.setAttribute("aria-label",s.t);
+    b.innerHTML='<img loading="lazy" src="'+enc(s.f)+'" alt="">';
+    b.addEventListener("click",function(){go(j)});
+    th.appendChild(b);
   });
-  lb.addEventListener("click",function(e){if(e.target!==img)shut()});
-  close.addEventListener("click",shut);
-  addEventListener("keydown",function(e){if(e.key==="Escape")shut()});
+  function go(j){
+    i=(j+S.length)%S.length;var s=S[i];
+    img.src=enc(s.f);img.alt=s.t;
+    ttl.textContent=s.t;dsc.textContent=s.d;
+    cnt.textContent=(i+1)+" / "+S.length;
+    th.querySelectorAll("button").forEach(function(b,k){b.classList.toggle("on",k===i)});
+    var on=th.children[i];if(on&&on.scrollIntoView)on.scrollIntoView({block:"nearest",inline:"center",behavior:"smooth"});
+  }
+  document.querySelector(".sl-nav.prev").addEventListener("click",function(){go(i-1)});
+  document.querySelector(".sl-nav.next").addEventListener("click",function(){go(i+1)});
+  addEventListener("keydown",function(e){
+    if(lb.classList.contains("open")){if(e.key==="Escape")shut();return}
+    if(e.key==="ArrowLeft")go(i-1);if(e.key==="ArrowRight")go(i+1);
+  });
+  function shut(){lb.classList.remove("open");document.body.style.overflow="";lbi.src=""}
+  img.addEventListener("click",function(){
+    lbi.src=img.src;lbi.alt=img.alt;lbc.textContent=ttl.textContent+" — "+dsc.textContent;
+    lb.classList.add("open");document.body.style.overflow="hidden";
+  });
+  lb.addEventListener("click",function(e){if(e.target!==lbi)shut()});
+  lb.querySelector(".lb-close").addEventListener("click",shut);
+  go(0);
 })();
 
 /* Station tabs (vanilla, accessible) */
