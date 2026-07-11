@@ -209,6 +209,20 @@ export function useAiJob(options: UseAiJobOptions = {}) {
           setTaskMeta(data.meta as TaskStatus["meta"]);
         }
 
+        // Long batch jobs (e.g. "Generate all specs") re-enqueue themselves before
+        // Celery's time limit and return continued_task_id — follow the new job
+        // instead of reporting completion halfway through.
+        const result = data.result as Record<string, unknown> | null | undefined;
+        const continuedTaskId =
+          mapped === "completed" && result && typeof result === "object"
+            ? result.continued_task_id
+            : undefined;
+        if (typeof continuedTaskId === "string" && continuedTaskId) {
+          taskIdRef.current = continuedTaskId;
+          setStatus("processing");
+          return;
+        }
+
         if (mapped === "pending") setStatus("pending");
         else if (mapped === "processing" || rawStatus.toUpperCase() === "PROGRESS") {
           setStatus("processing");
@@ -253,8 +267,11 @@ export function useAiJob(options: UseAiJobOptions = {}) {
       startElapsedTimer();
       startMessageRotation();
       void pollTask(taskId);
+      // Poll via taskIdRef so a continuation job (continued_task_id) is followed
+      // without restarting the timer or status bar.
       pollRef.current = window.setInterval(() => {
-        void pollTask(taskId);
+        const tid = taskIdRef.current;
+        if (tid) void pollTask(tid);
       }, 2000);
     },
     [clearTimers, pollTask, startElapsedTimer, startMessageRotation],

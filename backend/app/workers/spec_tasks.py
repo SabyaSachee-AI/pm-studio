@@ -2,7 +2,10 @@
 
 import asyncio
 import logging
+import time
 from uuid import UUID
+
+from celery.exceptions import SoftTimeLimitExceeded
 
 from app.core.celery_app import celery_app
 from app.core.database import SyncSessionLocal
@@ -65,6 +68,13 @@ def _git_commit_block_for(db, task: Task) -> str | None:
     )
 
 
+# Stop a generate-all batch well before Celery's 30-min soft limit and hand the
+# remaining specs to a fresh job — big projects never die with TimeLimitExceeded.
+_ALL_SPECS_BATCH_SEC = 1200
+# Safety cap on continuation jobs (20 min × 12 = 4 h of work max).
+_ALL_SPECS_MAX_CHAIN = 12
+
+
 @celery_app.task(bind=True, name="spec.generate_all")
 def generate_all_specs_task(
     self,
@@ -72,6 +82,7 @@ def generate_all_specs_task(
     only_missing: bool = True,
     model_provider: str | None = None,
     model_id: str | None = None,
+    chain_depth: int = 0,
 ) -> dict[str, object]:
     """Generate specs for every task in a project, one at a time (serially).
 
@@ -79,8 +90,13 @@ def generate_all_specs_task(
     produced identically to the individual button. Runs entirely on the worker,
     so it keeps going even if the browser tab is closed. Reports live progress
     via Celery task meta (current/total) for the status bar.
+
+    Every generated spec is persisted immediately. When the batch runs close to
+    Celery's time limit it re-enqueues itself (only_missing=True) and returns
+    ``continued_task_id`` so the UI keeps following the new job.
     """
     db = SyncSessionLocal()
+    started = time.monotonic()
     try:
         tasks = (
             db.query(Task)
@@ -104,6 +120,42 @@ def generate_all_specs_task(
                                   if model_provider and model_id else "Auto model chain"),
             })
 
+        def _continue_later(done_index: int) -> dict[str, object]:
+            """Persisted work is safe — hand the rest to a fresh task."""
+            if chain_depth >= _ALL_SPECS_MAX_CHAIN:
+                return {
+                    "status": "failed",
+                    "error": (
+                        f"Stopped after {chain_depth + 1} batches — models too slow. "
+                        "Click 'Generate all specs' again to continue (finished specs are kept)."
+                    ),
+                    "generated": generated, "failed": failed, "skipped": skipped,
+                }
+            nxt = generate_all_specs_task.apply_async(
+                kwargs={
+                    "project_id": project_id,
+                    "only_missing": True,
+                    "model_provider": model_provider,
+                    "model_id": model_id,
+                    "chain_depth": chain_depth + 1,
+                },
+                countdown=5,
+            )
+            logger.info(
+                "Generate-all specs continuing in new job %s (%s/%s done this batch)",
+                nxt.id, done_index, total,
+            )
+            return {
+                "status": "completed",
+                "continued_task_id": nxt.id,
+                "total": total,
+                "generated": generated, "failed": failed, "skipped": skipped,
+                "message": (
+                    f"Batch done ({done_index}/{total}) — continuing remaining specs "
+                    "in a new background job."
+                ),
+            }
+
         for i, task in enumerate(tasks, 1):
             spec = (
                 db.query(TaskSpec)
@@ -116,6 +168,11 @@ def generate_all_specs_task(
                 skipped += 1
                 _emit(i, task.title)
                 continue
+
+            # Batch time is up — persist-and-continue instead of dying on the
+            # Celery hard limit (TimeLimitExceeded kills the process mid-spec).
+            if time.monotonic() - started > _ALL_SPECS_BATCH_SEC:
+                return _continue_later(i - 1)
 
             # Ensure a usable spec row (create or reset) — mirrors _queue_spec_generation.
             if spec is None:
@@ -131,7 +188,12 @@ def generate_all_specs_task(
             db.refresh(spec)
 
             _emit(i, task.title)
-            result = generate_spec_task(str(spec.id), model_provider, model_id)  # in-process, serial
+            try:
+                result = generate_spec_task(str(spec.id), model_provider, model_id)  # in-process, serial
+            except SoftTimeLimitExceeded:
+                # Celery soft limit fired mid-spec — the finished specs are already
+                # saved; continue the rest in a fresh job.
+                return _continue_later(i - 1)
             if isinstance(result, dict) and result.get("error"):
                 failed += 1
             else:
@@ -142,6 +204,9 @@ def generate_all_specs_task(
             "generated": generated, "failed": failed, "skipped": skipped,
             "message": f"Done — {generated} generated, {skipped} skipped, {failed} failed.",
         }
+    except SoftTimeLimitExceeded:
+        logger.warning("Generate-all specs hit soft time limit", extra={"project_id": project_id})
+        return {"error": "Time limit reached — click 'Generate all specs' again to continue (finished specs are kept).", "status": "failed"}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Generate-all specs failed", extra={"project_id": project_id})
         return {"error": str(exc)[:500], "status": "failed"}
