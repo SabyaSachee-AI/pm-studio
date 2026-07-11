@@ -134,7 +134,10 @@ async def extract_modules(
     if not try_acquire_extract(str(body.project_id)):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Task extraction already running for this project. Wait for it to finish.",
+            detail=(
+                "Task extraction is already running for this project. "
+                "Wait for the progress bar to finish, or use Regenerate tasks after it completes."
+            ),
         )
 
     if not body.replace_existing and not body.fill_gaps_only:
@@ -161,13 +164,23 @@ async def extract_modules(
                 ),
             )
 
-    celery_task = extract_modules_task.delay(
-        str(body.project_id),
-        str(body.srs_id),
-        str(arch.id) if arch else None,
-        body.replace_existing,
-        body.fill_gaps_only,
-    )
+    try:
+        celery_task = extract_modules_task.delay(
+            str(body.project_id),
+            str(body.srs_id),
+            str(arch.id) if arch else None,
+            body.replace_existing,
+            body.fill_gaps_only,
+        )
+    except Exception:
+        from app.services.task.extract_lock import release_extract  # noqa: PLC0415
+
+        release_extract(str(body.project_id))
+        raise
+
+    from app.services.task.extract_lock import bind_extract_task  # noqa: PLC0415
+
+    bind_extract_task(str(body.project_id), celery_task.id)
     response: dict = {
         "project_id": str(body.project_id),
         "srs_id": str(body.srs_id),
