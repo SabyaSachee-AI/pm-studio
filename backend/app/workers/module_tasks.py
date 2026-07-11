@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -271,10 +272,24 @@ def extract_modules_task(
         ]
         max_order = max((t.order_index for t in regular_existing), default=-1) + 1
 
+        # Idempotency guard: never insert a task whose (normalized) title already
+        # exists live in this project — re-running extract/fill-gaps, or the AI
+        # returning overlapping items, must not create duplicates on the board.
+        def _norm_title(t: str | None) -> str:
+            return re.sub(r"\s+", " ", (t or "").strip().lower())
+
+        seen_titles = {_norm_title(t.title) for t in existing_tasks}
+        skipped_dupes = 0
+
         created_ids: list[str] = []
         order = max_order
         for module in result.modules:
             for item in module.tasks:
+                title_key = _norm_title(item.title)
+                if title_key and title_key in seen_titles:
+                    skipped_dupes += 1
+                    continue
+                seen_titles.add(title_key)
                 priority = _PRIORITY_MAP.get(item.priority.lower(), TaskPriority.medium)
                 task = Task(
                     project_id=UUID(project_id),
@@ -329,6 +344,7 @@ def extract_modules_task(
             "srs_id": srs_id,
             "modules_count": len(result.modules),
             "tasks_created": len(created_ids),
+            "duplicates_skipped": skipped_dupes,
             "task_ids": created_ids,
             "system_tasks_created": len(system_task_ids),
             "fr_coverage": {
@@ -350,4 +366,7 @@ def extract_modules_task(
         )
         return {"error": str(exc)[:500]}
     finally:
+        from app.services.task.extract_lock import release_extract  # noqa: PLC0415
+
+        release_extract(project_id)
         db.close()

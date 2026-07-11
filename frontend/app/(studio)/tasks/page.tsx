@@ -689,6 +689,7 @@ export default function TasksPage() {
 
   const copiedTimer    = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSpecRef = useRef<{ specId: string } | null>(null);
+  const extractInFlightRef = useRef(false);
   const panelRef       = useRef<HTMLDivElement>(null);
 
   const extractJob = useAiJob({ onComplete: () => { void loadBoard(projectId) } });
@@ -932,12 +933,16 @@ export default function TasksPage() {
   }
 
   async function handleGenerateTasks(mode: "generate" | "regenerate" | "fill-gaps" = "generate") {
+    if (extractInFlightRef.current || extractJob.isRunning) return;
+    extractInFlightRef.current = true;
+
     const ELIGIBLE = ["approved", "finalized", "confirmed"];
     const approved = srsList.find((s) =>
       ELIGIBLE.includes(s.status) ||
       ELIGIBLE.includes((s as SRS & { workflow_status?: string }).workflow_status ?? ""),
     );
     if (!approved) {
+      extractInFlightRef.current = false;
       alert(
         "No eligible SRS found. Finalize your PRD and SRS, and confirm a finalized architecture suite before generating tasks.",
       );
@@ -946,7 +951,7 @@ export default function TasksPage() {
 
     // regenerate → replace_existing=true  (wipes old tasks + specs, creates fresh set)
     // fill-gaps  → fill_gaps_only=true    (only adds tasks for FRs with no coverage)
-    // generate   → both false             (first run)
+    // generate   → both false             (first run only — server rejects if tasks exist)
     const opts = mode === "regenerate"
       ? { replaceExisting: true }
       : mode === "fill-gaps"
@@ -959,6 +964,8 @@ export default function TasksPage() {
       extractJob.startJob(task_id, "Extracting modules");
     } catch (err) {
       extractJob.failManual(err instanceof Error ? err.message : "Failed to start task generation");
+    } finally {
+      extractInFlightRef.current = false;
     }
   }
 

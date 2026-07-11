@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user, require_screen_permission
@@ -127,6 +127,39 @@ async def extract_modules(
     )
     arch = arch_result.scalars().first()
     arch_warning = None if arch else "No finalized architecture suite found — generating from PRD + SRS only"
+
+    from app.services.task.extract_lock import try_acquire_extract  # noqa: PLC0415
+    from app.services.task.system_prompts import SYSTEM_TASK_ORDERS  # noqa: PLC0415
+
+    if not try_acquire_extract(str(body.project_id)):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Task extraction already running for this project. Wait for it to finish.",
+        )
+
+    if not body.replace_existing and not body.fill_gaps_only:
+        regular_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(Task)
+                .where(
+                    Task.project_id == body.project_id,
+                    Task.deleted_at.is_(None),
+                    Task.order_index.notin_(list(SYSTEM_TASK_ORDERS)),
+                )
+            )
+        ).scalar_one()
+        if regular_count and regular_count > 0:
+            from app.services.task.extract_lock import release_extract  # noqa: PLC0415
+
+            release_extract(str(body.project_id))
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Tasks already exist for this project. "
+                    "Use Regenerate tasks to replace them, or Solve gaps / Fill gaps for missing FRs only."
+                ),
+            )
 
     celery_task = extract_modules_task.delay(
         str(body.project_id),
