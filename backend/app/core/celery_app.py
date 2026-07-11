@@ -53,8 +53,8 @@ celery_app.conf.update(
     # A stuck task (e.g. endless provider rate-limits) can't hog a worker forever.
     # Soft limit raises a catchable error first (long codegen auto-resumes); the
     # hard limit is a last-resort backstop. Normal tasks finish well under these.
-    task_soft_time_limit=1800,   # 30 min
-    task_time_limit=2400,        # 40 min
+    task_soft_time_limit=5400,   # 90 min
+    task_time_limit=7200,        # 2 hours
     # Self-healing: periodically re-enqueue builds whose task died (worker
     # restart/rebuild, crash). Runs via the build worker's embedded beat (-B).
     beat_schedule={
