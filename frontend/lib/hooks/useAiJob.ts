@@ -220,6 +220,9 @@ export function useAiJob(options: UseAiJobOptions = {}) {
         if (typeof continuedTaskId === "string" && continuedTaskId) {
           taskIdRef.current = continuedTaskId;
           setStatus("processing");
+          if (result?.message) {
+            setTaskMeta({ message: String(result.message) });
+          }
           return;
         }
 

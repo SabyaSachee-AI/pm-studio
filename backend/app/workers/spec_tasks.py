@@ -68,11 +68,30 @@ def _git_commit_block_for(db, task: Task) -> str | None:
     )
 
 
-# Stop a generate-all batch well before Celery's 30-min soft limit and hand the
-# remaining specs to a fresh job — big projects never die with TimeLimitExceeded.
-_ALL_SPECS_BATCH_SEC = 1200
-# Safety cap on continuation jobs (20 min × 12 = 4 h of work max).
-_ALL_SPECS_MAX_CHAIN = 12
+# Hand off to a fresh job before Celery's 90 min soft / 2 h hard limits — each
+# finished spec is already saved, so the chain runs until every task has a spec.
+_ALL_SPECS_BATCH_SEC = 4200  # 70 min (50 min buffer before soft limit)
+
+
+def _enqueue_spec_generate_all(
+    project_id: str,
+    *,
+    model_provider: str | None,
+    model_id: str | None,
+    chain_depth: int,
+) -> str:
+    """Start the next generate-all batch (only_missing=True). Returns new task id."""
+    nxt = generate_all_specs_task.apply_async(
+        kwargs={
+            "project_id": project_id,
+            "only_missing": True,
+            "model_provider": model_provider,
+            "model_id": model_id,
+            "chain_depth": chain_depth + 1,
+        },
+        countdown=5,
+    )
+    return nxt.id
 
 
 @celery_app.task(bind=True, name="spec.generate_all")
@@ -122,37 +141,23 @@ def generate_all_specs_task(
 
         def _continue_later(done_index: int) -> dict[str, object]:
             """Persisted work is safe — hand the rest to a fresh task."""
-            if chain_depth >= _ALL_SPECS_MAX_CHAIN:
-                return {
-                    "status": "failed",
-                    "error": (
-                        f"Stopped after {chain_depth + 1} batches — models too slow. "
-                        "Click 'Generate all specs' again to continue (finished specs are kept)."
-                    ),
-                    "generated": generated, "failed": failed, "skipped": skipped,
-                }
-            nxt = generate_all_specs_task.apply_async(
-                kwargs={
-                    "project_id": project_id,
-                    "only_missing": True,
-                    "model_provider": model_provider,
-                    "model_id": model_id,
-                    "chain_depth": chain_depth + 1,
-                },
-                countdown=5,
+            continued_id = _enqueue_spec_generate_all(
+                project_id,
+                model_provider=model_provider,
+                model_id=model_id,
+                chain_depth=chain_depth,
             )
             logger.info(
                 "Generate-all specs continuing in new job %s (%s/%s done this batch)",
-                nxt.id, done_index, total,
+                continued_id, done_index, total,
             )
             return {
                 "status": "completed",
-                "continued_task_id": nxt.id,
+                "continued_task_id": continued_id,
                 "total": total,
                 "generated": generated, "failed": failed, "skipped": skipped,
                 "message": (
-                    f"Batch done ({done_index}/{total}) — continuing remaining specs "
-                    "in a new background job."
+                    f"Spec {done_index}/{total} — auto-continuing remaining specs…"
                 ),
             }
 
@@ -205,8 +210,18 @@ def generate_all_specs_task(
             "message": f"Done — {generated} generated, {skipped} skipped, {failed} failed.",
         }
     except SoftTimeLimitExceeded:
-        logger.warning("Generate-all specs hit soft time limit", extra={"project_id": project_id})
-        return {"error": "Time limit reached — click 'Generate all specs' again to continue (finished specs are kept).", "status": "failed"}
+        logger.warning("Generate-all specs hit soft time limit — auto-continuing", extra={"project_id": project_id})
+        continued_id = _enqueue_spec_generate_all(
+            project_id,
+            model_provider=model_provider,
+            model_id=model_id,
+            chain_depth=chain_depth,
+        )
+        return {
+            "status": "completed",
+            "continued_task_id": continued_id,
+            "message": "Time limit reached — auto-continuing remaining specs…",
+        }
     except Exception as exc:  # noqa: BLE001
         logger.exception("Generate-all specs failed", extra={"project_id": project_id})
         return {"error": str(exc)[:500], "status": "failed"}
